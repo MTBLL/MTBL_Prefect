@@ -1,4 +1,11 @@
-"""Shared paths and config for mtbl_prefect flows and tasks."""
+"""Shared paths and config for mtbl_prefect flows and tasks.
+
+Native paths work in both host and container: docker-compose mounts the host
+trees at the same paths inside the container, so hardcoded `/Users/Shared/...`
+references resolve correctly in either environment.
+"""
+
+from __future__ import annotations
 
 from pathlib import Path
 
