@@ -31,11 +31,12 @@ def _post_slack(flow_run, state) -> None:
         logger.warning("SLACK_WEBHOOK_URL unset; skipping Slack notification")
         return
     try:
-        httpx.post(
+        response = httpx.post(
             webhook,
             json={"text": f":x: MTBL pipeline `{flow_run.name}` failed: {state.message}"},
             timeout=10,
         )
+        response.raise_for_status()
     except httpx.HTTPError as e:
         logger.error("Slack post failed: %s", e)
 
@@ -47,6 +48,7 @@ def _ping_healthcheck(*, success: bool) -> None:
         return
     url = base.rstrip("/") if success else f"{base.rstrip('/')}/fail"
     try:
-        httpx.get(url, timeout=10)
+        response = httpx.get(url, timeout=10)
+        response.raise_for_status()
     except httpx.HTTPError as e:
         logger.error("Healthcheck ping failed: %s", e)

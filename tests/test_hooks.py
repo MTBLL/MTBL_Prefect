@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import httpx
 
 from mtbl_prefect.tasks import hooks
 
@@ -60,12 +62,54 @@ def test_hooks_no_crash_when_env_unset(monkeypatch):
 def test_notify_failure_does_not_propagate_http_errors(monkeypatch):
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T/B/X")
     monkeypatch.setenv("HEALTHCHECKS_PING_URL", "https://hc-ping.com/abc")
-    import httpx as real_httpx
 
     def boom(*a, **kw):
-        raise real_httpx.HTTPError("network down")
+        raise httpx.HTTPError("network down")
 
     monkeypatch.setattr(hooks.httpx, "post", boom)
     monkeypatch.setattr(hooks.httpx, "get", boom)
     # Hook itself must not raise even if both endpoints are down.
     hooks.notify_failure(None, _flow_run(), _state())
+
+
+def _bad_response(status_code: int) -> MagicMock:
+    """Build a mock response whose raise_for_status raises HTTPStatusError."""
+    resp = MagicMock()
+    resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        f"{status_code}",
+        request=MagicMock(),
+        response=MagicMock(status_code=status_code),
+    )
+    return resp
+
+
+def test_notify_failure_catches_slack_4xx_response(monkeypatch):
+    """A revoked webhook returning 410 Gone is caught + logged, not propagated."""
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T/B/X")
+    monkeypatch.delenv("HEALTHCHECKS_PING_URL", raising=False)
+    with patch.object(hooks.httpx, "post", return_value=_bad_response(410)):
+        hooks.notify_failure(None, _flow_run(), _state())
+
+
+def test_notify_failure_catches_slack_5xx_response(monkeypatch):
+    """A Slack server-side error is caught + logged, not propagated."""
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T/B/X")
+    monkeypatch.delenv("HEALTHCHECKS_PING_URL", raising=False)
+    with patch.object(hooks.httpx, "post", return_value=_bad_response(503)):
+        hooks.notify_failure(None, _flow_run(), _state())
+
+
+def test_notify_success_catches_healthcheck_4xx_response(monkeypatch):
+    """A bad healthcheck URL returning 404 is caught + logged, not propagated."""
+    monkeypatch.setenv("HEALTHCHECKS_PING_URL", "https://hc-ping.com/abc")
+    with patch.object(hooks.httpx, "get", return_value=_bad_response(404)):
+        hooks.notify_success(None, _flow_run(), _state())
+
+
+def test_notify_failure_catches_healthcheck_4xx_during_fail_ping(monkeypatch):
+    """When Slack succeeds but healthcheck fail-ping returns 4xx, hook still succeeds."""
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T/B/X")
+    monkeypatch.setenv("HEALTHCHECKS_PING_URL", "https://hc-ping.com/abc")
+    with patch.object(hooks.httpx, "post"), \
+         patch.object(hooks.httpx, "get", return_value=_bad_response(404)):
+        hooks.notify_failure(None, _flow_run(), _state())
