@@ -15,6 +15,22 @@ services:
       retries: 10
     restart: unless-stopped
 
+  fantasy-pg:
+    image: postgres:18.3-alpine
+    container_name: mtbl-fantasy-pg
+    environment:
+      POSTGRES_USER: fantasy
+      POSTGRES_PASSWORD: fantasy
+      POSTGRES_DB: fantasy_baseball
+    volumes:
+      - fantasy_pg_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fantasy -d fantasy_baseball"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   prefect-server:
     image: prefecthq/prefect:3-latest
     container_name: mtbl-prefect-server
@@ -38,16 +54,33 @@ services:
       dockerfile: Dockerfile
     container_name: mtbl-prefect-runner
     depends_on:
-      - prefect-server
+      prefect-server:
+        condition: service_started
+      fantasy-pg:
+        condition: service_healthy
     environment:
       PREFECT_API_URL: http://prefect-server:4200/api
-      MTBL_TOOLS_ROOT: /work/tools
-      MTBL_RESOURCES_ROOT: /work/resources
+      MTBL_VENV_ROOT: /opt/uv-envs
+      # uv's package cache (overlayfs) and the per-project venv target (named
+      # volume) are on different filesystems, so hardlinks can't be used.
+      # Tell uv to copy instead — suppresses the noisy warning on every install.
+      UV_LINK_MODE: copy
     env_file:
       - .env
     volumes:
-      - /Users/Shared/BaseballHQ/tools:/work/tools:ro
-      - /Users/Shared/BaseballHQ/resources:/work/resources
+      # Native-path mounts: same path inside the container as on the host so
+      # sub-project CLIs with hardcoded /Users/Shared/BaseballHQ/... defaults
+      # resolve correctly without per-CLI overrides.
+      # Tools mount is read-write because setuptools-based sub-projects (e.g.
+      # player-universe-load) need to write <pkg>.egg-info during build.
+      # Hatchling-based sub-projects don't, but a single mount mode applies to
+      # all. Build artifacts land in __pycache__/ and *.egg-info/ which are
+      # gitignored on the host.
+      - /Users/Shared/BaseballHQ/tools:/Users/Shared/BaseballHQ/tools
+      - /Users/Shared/BaseballHQ/resources:/Users/Shared/BaseballHQ/resources
+      - uv_env_cache:/opt/uv-envs
 
 volumes:
   prefect_db:
+  uv_env_cache:
+  fantasy_pg_data:
