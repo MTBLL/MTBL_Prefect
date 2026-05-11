@@ -41,6 +41,8 @@ services:
       - prefect-server
     environment:
       PREFECT_API_URL: http://prefect-server:4200/api
+      MTBL_TOOLS_ROOT: /work/tools
+      MTBL_RESOURCES_ROOT: /work/resources
     env_file:
       - .env
     volumes:
