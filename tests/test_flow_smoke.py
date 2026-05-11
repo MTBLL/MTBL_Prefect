@@ -30,7 +30,11 @@ def test_full_pipeline_preseason_dispatches_all_pipes(monkeypatch):
     # All extractors invoked
     assert any("ESPN_API_Extractor" in p and "players-extract" in a for p, a in calls)
     assert any("ESPN_API_Extractor" in p and "league-extract" in a for p, a in calls)
-    assert any("Fangraphs_API_Extractor" in p for p, _ in calls)
+    # Fangraphs gets --preseason in preseason mode (not -ros)
+    assert any(
+        "Fangraphs_API_Extractor" in p and "--preseason" in a and "-ros" not in a
+        for p, a in calls
+    )
     # Savant uses year-1 in preseason
     assert any("Savant_API_Extractor" in p and "2024" in a for p, a in calls)
 
@@ -54,3 +58,23 @@ def test_full_pipeline_preseason_dispatches_all_pipes(monkeypatch):
 
     assert extract_last < transform_first, "extract must finish before transform starts"
     assert transform_last < load_first, "transform must finish before load starts"
+
+
+def test_full_pipeline_in_season_uses_ros_flag_for_fangraphs(monkeypatch):
+    """In-season run (no --preseason) should pass -ros to Fangraphs, not --preseason."""
+    calls: list[tuple[str, str]] = []
+
+    def fake_run_uv_cli(project_dir, *args, allow_exit_code_1=False):
+        calls.append((project_dir, " ".join(str(a) for a in args)))
+
+    monkeypatch.setattr(shell, "run_uv_cli", fake_run_uv_cli)
+
+    full_pipeline(year=2026, preseason=False)
+
+    # Fangraphs gets -ros in-season (not --preseason)
+    assert any(
+        "Fangraphs_API_Extractor" in p and "-ros" in a and "--preseason" not in a
+        for p, a in calls
+    )
+    # Savant uses --season equal to --year when not in preseason
+    assert any("Savant_API_Extractor" in p and "2026" in a for p, a in calls)

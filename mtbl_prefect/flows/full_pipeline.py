@@ -20,6 +20,6 @@ from mtbl_prefect.tasks.hooks import notify_failure, notify_success
 def full_pipeline(year: int, preseason: bool = False) -> None:
     season = year - 1 if preseason else year
     print(f"full_pipeline: year={year} season={season} preseason={preseason}")
-    extract(year=year, season=season)
+    extract(year=year, season=season, preseason=preseason)
     transform(year=year)
     load(year=year)

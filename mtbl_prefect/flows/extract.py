@@ -42,20 +42,24 @@ def espn_api_extractor(year: int) -> None:
     )
 
 
-fangraphs_extractor = cli_task(
-    "fangraphs-api-extractor",
-    project_dir="_extract/Fangraphs_API_Extractor",
-    command=[
-        "fangraphs-api-extractor",
-        "--year",
-        "{year}",
-        "-ros",
-        "--output-dir",
-        str(EXTRACT_OUTPUT_DIR),
-    ],
+@task(
+    name="fangraphs-api-extractor",
     retries=3,
     retry_delay_seconds=[30, 120, 600],
+    log_prints=True,
 )
+def fangraphs_extractor(year: int, preseason: bool) -> None:
+    """Pull Fangraphs projections. -ros mid-season, --preseason in the offseason."""
+    mode_flag = "--preseason" if preseason else "-ros"
+    shell.run_uv_cli(
+        "_extract/Fangraphs_API_Extractor",
+        "fangraphs-api-extractor",
+        "--year",
+        str(year),
+        mode_flag,
+        "--output-dir",
+        str(EXTRACT_OUTPUT_DIR),
+    )
 
 
 savant_extractor = cli_task(
@@ -74,11 +78,11 @@ savant_extractor = cli_task(
 
 
 @flow(name="extract", log_prints=True)
-def extract(year: int, season: int) -> None:
+def extract(year: int, season: int, preseason: bool) -> None:
     """Run all three extractors concurrently. Any failure fails the subflow."""
     futures = [
         espn_api_extractor.submit(year),
-        fangraphs_extractor.submit(year=year),
+        fangraphs_extractor.submit(year=year, preseason=preseason),
         savant_extractor.submit(season=season),
     ]
     for f in futures:
