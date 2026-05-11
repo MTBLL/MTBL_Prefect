@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:18.3-alpine
+    container_name: mtbl-prefect-postgres
+    environment:
+      POSTGRES_USER: prefect
+      POSTGRES_PASSWORD: prefect
+      POSTGRES_DB: prefect
+    volumes:
+      - prefect_db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prefect -d prefect"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  prefect-server:
+    image: prefecthq/prefect:3-latest
+    container_name: mtbl-prefect-server
+    command: prefect server start --host 0.0.0.0 --port 4200
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://prefect:prefect@postgres:5432/prefect
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      PREFECT_UI_URL: http://localhost:4200
+      PREFECT_API_URL: http://localhost:4200/api
+    ports:
+      - "4200:4200"
+    restart: unless-stopped
+
+  runner:
+    profiles: ["runner"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mtbl-prefect-runner
+    depends_on:
+      - prefect-server
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+    env_file:
+      - .env
+    volumes:
+      - /Users/Shared/BaseballHQ/tools:/work/tools:ro
+      - /Users/Shared/BaseballHQ/resources:/work/resources
+
+volumes:
+  prefect_db:
