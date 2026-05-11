@@ -21,6 +21,22 @@ Execution tracking: `mtbl-player-etl` project in Linear (trp workspace)
    docker compose --profile runner run --rm runner full-pipeline --year 2026
    ```
 
+## Invocation matrix
+
+Everything is triggered from your host shell. The runner container is ephemeral — spawned per flow run, exits when the flow completes. Only `prefect-server` and `postgres` run continuously.
+
+| Need | Command | Where it runs |
+|---|---|---|
+| Start the always-on stack | `docker compose up -d` | Host triggers, server + Postgres run in Docker |
+| Stop the stack | `docker compose down` | Host triggers |
+| Trigger a flow (production-faithful) | `docker compose --profile runner run --rm runner full-pipeline --year 2026` | Host triggers, flow runs in ephemeral container |
+| Trigger a flow (dev, fast iteration) | `uv run python -m mtbl_prefect full-pipeline --year 2026` | Host directly, bypassing Docker |
+| Inspect Prefect state | `prefect flow-run ls` (with `PREFECT_API_URL` set) | Host shell hits the in-Docker server over HTTP |
+| Tail server logs | `docker compose logs -f prefect-server` | Host triggers |
+| Open a debug shell in the runner image | `docker compose --profile runner run --rm --entrypoint bash runner` | Escape hatch, not a normal workflow |
+
+The Phase 3 LaunchAgent is just the "production-faithful" row, fired by `launchd` at 00:16 America/Denver instead of by your shell.
+
 ## Layout
 
 - `mtbl_prefect/` — package source. Flows, tasks, and hooks are added in Phase 1.
