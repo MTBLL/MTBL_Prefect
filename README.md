@@ -35,17 +35,21 @@ Everything is triggered from your host shell. The runner container is ephemeral 
 | Tail server logs | `docker compose logs -f prefect-server` | Host triggers |
 | Open a debug shell in the runner image | `docker compose --profile runner run --rm --entrypoint bash runner` | Escape hatch, not a normal workflow |
 
-The Phase 3 LaunchAgent is just the "production-faithful" row, fired by `launchd` at 00:16 America/Denver instead of by your shell.
+The Phase 3 LaunchAgent is just the "production-faithful" row, fired by `launchd` at 00:16 America/Denver instead of by your shell — see [`launchd/README.md`](launchd/README.md) for install / verify / uninstall.
 
 ## Layout
 
-- `mtbl_prefect/` — package source. Flows, tasks, and hooks are added in Phase 1.
-- `Dockerfile` — runner image, built on `ghcr.io/astral-sh/uv:python3.13-bookworm-slim`.
-- `docker-compose.yml` — `prefect-server` + `postgres` always-on; `runner` under the `runner` profile so it stays dormant during a default `up`.
+- `mtbl_prefect/` — package source: flows, tasks, hooks.
+- `Dockerfile` — runner image, built on `ghcr.io/astral-sh/uv:python3.13-bookworm-slim` + `postgresql-client-18`.
+- `docker-compose.yml` — `prefect-server` + `postgres` + `fantasy-pg` always-on; `runner` under the `runner` profile so it stays dormant during a default `up`.
 - `.env.example` — environment variables required at runtime.
-- `tests/` — pytest suite (populated in Phase 1).
+- `launchd/` — macOS LaunchAgent + install scripts for nightly scheduling (Phase 3).
+- `tests/` — pytest suite.
 
 ## Phase status
 
-- **Phase 0** (scaffold + UI reachable): in progress on this branch.
-- **Phase 1+** tracked in the `mtbl-player-etl` Linear project.
+- **Phase 0** (scaffold + UI reachable) — ✓ merged.
+- **Phase 1** (full_pipeline flow + parallel extractors) — ✓ merged.
+- **Phase 2** (alerting hooks + container path fix) — ✓ merged.
+- **Phase 3** (LaunchAgent nightly scheduling) — in progress on this branch.
+- **Phase 4+** tracked in the `mtbl-player-etl` Linear project.
