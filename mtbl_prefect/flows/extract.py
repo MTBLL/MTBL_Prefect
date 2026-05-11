@@ -49,8 +49,14 @@ def espn_api_extractor(year: int) -> None:
     log_prints=True,
 )
 def fangraphs_extractor(year: int, preseason: bool) -> None:
-    """Pull Fangraphs projections. -ros mid-season, --preseason in the offseason."""
-    mode_flag = "--preseason" if preseason else "-ros"
+    """Pull Fangraphs projections with the right source mix for the time of year.
+
+    --ros selects the in-season "rest of season" source mix (in-progress data
+    feeds projections of remaining games). --winter-meetings selects the
+    offseason source mix tuned for full-year projections with no in-progress
+    games to incorporate.
+    """
+    mode_flag = "--winter-meetings" if preseason else "--ros"
     shell.run_uv_cli(
         "_extract/Fangraphs_API_Extractor",
         "fangraphs-api-extractor",
