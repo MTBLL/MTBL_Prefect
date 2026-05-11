@@ -49,6 +49,7 @@ fangraphs_extractor = cli_task(
         "fangraphs-api-extractor",
         "--year",
         "{year}",
+        "-ros",
         "--output-dir",
         str(EXTRACT_OUTPUT_DIR),
     ],
