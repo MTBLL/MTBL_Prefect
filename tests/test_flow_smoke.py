@@ -60,8 +60,9 @@ def test_full_pipeline_preseason_dispatches_all_pipes(monkeypatch):
     assert transform_last < load_first, "transform must finish before load starts"
 
 
-def test_full_pipeline_in_season_uses_ros_flag_for_fangraphs(monkeypatch):
-    """In-season run (no --preseason) should pass -ros to Fangraphs, not --preseason."""
+def test_full_pipeline_in_season_omits_mode_flag_for_fangraphs(monkeypatch):
+    """In-season run (no --preseason) should NOT pass --winter-meetings to Fangraphs;
+    the regular-season default mix handles rest-of-season behavior on its own."""
     calls: list[tuple[str, str]] = []
 
     def fake_run_uv_cli(project_dir, *args, allow_exit_code_1=False):
