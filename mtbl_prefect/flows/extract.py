@@ -51,21 +51,22 @@ def espn_api_extractor(year: int) -> None:
 def fangraphs_extractor(year: int, preseason: bool) -> None:
     """Pull Fangraphs projections with the right source mix for the time of year.
 
-    --ros selects the in-season "rest of season" source mix (in-progress data
-    feeds projections of remaining games). --winter-meetings selects the
-    offseason source mix tuned for full-year projections with no in-progress
-    games to incorporate.
+    --winter-meetings selects the offseason source mix tuned for full-year
+    projections with no in-progress games to incorporate. In-season we send no
+    mode flag — the Fangraphs CLI's regular-season default mix already uses
+    sources that self-update mid-year, producing rest-of-season-flavored
+    projections without any preset switching required.
     """
-    mode_flag = "--winter-meetings" if preseason else "--ros"
-    shell.run_uv_cli(
-        "_extract/Fangraphs_API_Extractor",
+    args = [
         "fangraphs-api-extractor",
         "--year",
         str(year),
-        mode_flag,
         "--output-dir",
         str(EXTRACT_OUTPUT_DIR),
-    )
+    ]
+    if preseason:
+        args.append("--winter-meetings")
+    shell.run_uv_cli("_extract/Fangraphs_API_Extractor", *args)
 
 
 savant_extractor = cli_task(

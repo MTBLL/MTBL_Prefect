@@ -30,9 +30,9 @@ def test_full_pipeline_preseason_dispatches_all_pipes(monkeypatch):
     # All extractors invoked
     assert any("ESPN_API_Extractor" in p and "players-extract" in a for p, a in calls)
     assert any("ESPN_API_Extractor" in p and "league-extract" in a for p, a in calls)
-    # Fangraphs gets --winter-meetings in preseason mode (not --ros)
+    # Fangraphs gets --winter-meetings in preseason mode
     assert any(
-        "Fangraphs_API_Extractor" in p and "--winter-meetings" in a and "--ros" not in a
+        "Fangraphs_API_Extractor" in p and "--winter-meetings" in a
         for p, a in calls
     )
     # Savant uses year-1 in preseason
@@ -71,9 +71,9 @@ def test_full_pipeline_in_season_uses_ros_flag_for_fangraphs(monkeypatch):
 
     full_pipeline(year=2026, preseason=False)
 
-    # Fangraphs gets --ros in-season (not --winter-meetings)
+    # Fangraphs gets no mode flag in-season (default mix handles rest-of-season behavior)
     assert any(
-        "Fangraphs_API_Extractor" in p and "--ros" in a and "--winter-meetings" not in a
+        "Fangraphs_API_Extractor" in p and "--winter-meetings" not in a
         for p, a in calls
     )
     # Savant uses --season equal to --year when not in preseason
