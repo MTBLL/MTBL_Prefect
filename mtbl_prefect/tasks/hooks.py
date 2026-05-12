@@ -1,4 +1,4 @@
-"""Flow state hooks: failure -> Slack + healthcheck fail-ping; completion -> healthcheck success-ping.
+"""Flow state hooks: failure -> Slack + healthcheck fail-ping; completion -> Slack + healthcheck success-ping.
 
 All hooks are env-tolerant. If `SLACK_WEBHOOK_URL` or `HEALTHCHECKS_PING_URL`
 is unset, the corresponding side-effect is skipped rather than crashing the flow.
@@ -16,26 +16,32 @@ logger = logging.getLogger(__name__)
 
 def notify_failure(flow, flow_run, state) -> None:
     """on_failure / on_crashed hook: post to Slack + ping healthcheck fail endpoint."""
-    _post_slack(flow_run, state)
+    _post_slack(flow_run, state, success=False)
     _ping_healthcheck(success=False)
 
 
 def notify_success(flow, flow_run, state) -> None:
-    """on_completion hook: ping healthcheck success endpoint. No Slack noise on success."""
+    """on_completion hook: post to Slack + ping healthcheck success endpoint.
+
+    Solo-ops workflow treats the Slack channel as the dashboard — positive
+    confirmation each morning is more useful than silent success.
+    """
+    _post_slack(flow_run, state, success=True)
     _ping_healthcheck(success=True)
 
 
-def _post_slack(flow_run, state) -> None:
+def _post_slack(flow_run, state, *, success: bool) -> None:
     webhook = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook:
         logger.warning("SLACK_WEBHOOK_URL unset; skipping Slack notification")
         return
+    if success:
+        text = f":white_check_mark: MTBL pipeline `{flow_run.name}` completed successfully"
+    else:
+        msg = state.message if state and state.message else "no state message"
+        text = f":x: MTBL pipeline `{flow_run.name}` failed: {msg}"
     try:
-        response = httpx.post(
-            webhook,
-            json={"text": f":x: MTBL pipeline `{flow_run.name}` failed: {state.message}"},
-            timeout=10,
-        )
+        response = httpx.post(webhook, json={"text": text}, timeout=10)
         response.raise_for_status()
     except httpx.HTTPError as e:
         logger.error("Slack post failed: %s", e)
