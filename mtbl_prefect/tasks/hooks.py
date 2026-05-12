@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 def notify_failure(flow, flow_run, state) -> None:
     """on_failure / on_crashed hook: post to Slack + ping healthcheck fail endpoint."""
-    _post_slack(flow_run, state, success=False)
+    # On failure paths, missing Slack config IS a real concern — alerting
+    # might be invisible. Keep the WARN-level "unset" log.
+    _post_slack(flow_run, state, success=False, warn_if_missing=True)
     _ping_healthcheck(success=False)
 
 
@@ -26,14 +28,20 @@ def notify_success(flow, flow_run, state) -> None:
     Solo-ops workflow treats the Slack channel as the dashboard — positive
     confirmation each morning is more useful than silent success.
     """
-    _post_slack(flow_run, state, success=True)
+    # On success paths, Slack is an OPT-IN confirmation. Missing config is
+    # expected for users who rely on healthchecks-only signalling, so
+    # demote the "unset" log from WARN to DEBUG to avoid noise on healthy runs.
+    _post_slack(flow_run, state, success=True, warn_if_missing=False)
     _ping_healthcheck(success=True)
 
 
-def _post_slack(flow_run, state, *, success: bool) -> None:
+def _post_slack(flow_run, state, *, success: bool, warn_if_missing: bool = True) -> None:
     webhook = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook:
-        logger.warning("SLACK_WEBHOOK_URL unset; skipping Slack notification")
+        if warn_if_missing:
+            logger.warning("SLACK_WEBHOOK_URL unset; skipping Slack notification")
+        else:
+            logger.debug("SLACK_WEBHOOK_URL unset; skipping Slack notification")
         return
     if success:
         text = f":white_check_mark: MTBL pipeline `{flow_run.name}` completed successfully"

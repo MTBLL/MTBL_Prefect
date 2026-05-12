@@ -153,3 +153,35 @@ def test_hooks_no_crash_when_env_unset(monkeypatch):
     # Neither call should raise.
     hooks.notify_failure(None, _flow_run(), _state())
     hooks.notify_success(None, _flow_run(), _state())
+
+
+def test_notify_success_does_not_warn_when_slack_unset(monkeypatch, caplog):
+    """Success path should NOT emit a WARNING when SLACK_WEBHOOK_URL is absent —
+    Slack is opt-in for success runs, so missing config is expected and quiet."""
+    import logging
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("HEALTHCHECKS_PING_URL", raising=False)
+    with caplog.at_level(logging.DEBUG, logger="mtbl_prefect.tasks.hooks"):
+        hooks.notify_success(None, _flow_run(), _state())
+    slack_records = [r for r in caplog.records if "SLACK_WEBHOOK_URL unset" in r.message]
+    assert slack_records, "expected a DEBUG-level log about missing Slack config"
+    assert all(r.levelno == logging.DEBUG for r in slack_records), (
+        f"success-path missing-Slack log must be DEBUG, got "
+        f"{[logging.getLevelName(r.levelno) for r in slack_records]}"
+    )
+
+
+def test_notify_failure_warns_when_slack_unset(monkeypatch, caplog):
+    """Failure path SHOULD warn when SLACK_WEBHOOK_URL is absent —
+    you may have lost alerting visibility on a real failure."""
+    import logging
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("HEALTHCHECKS_PING_URL", raising=False)
+    with caplog.at_level(logging.DEBUG, logger="mtbl_prefect.tasks.hooks"):
+        hooks.notify_failure(None, _flow_run(), _state())
+    slack_records = [r for r in caplog.records if "SLACK_WEBHOOK_URL unset" in r.message]
+    assert slack_records, "expected a WARNING-level log about missing Slack config"
+    assert any(r.levelno == logging.WARNING for r in slack_records), (
+        f"failure-path missing-Slack log must be WARNING, got "
+        f"{[logging.getLevelName(r.levelno) for r in slack_records]}"
+    )
