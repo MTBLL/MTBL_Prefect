@@ -42,31 +42,24 @@ def espn_api_extractor(year: int) -> None:
     )
 
 
-@task(
-    name="fangraphs-api-extractor",
-    retries=3,
-    retry_delay_seconds=[30, 120, 600],
-    log_prints=True,
-)
-def fangraphs_extractor(year: int, preseason: bool) -> None:
-    """Pull Fangraphs projections with the right source mix for the time of year.
-
-    --winter-meetings selects the offseason source mix tuned for full-year
-    projections with no in-progress games to incorporate. In-season we send no
-    mode flag — the Fangraphs CLI's regular-season default mix already uses
-    sources that self-update mid-year, producing rest-of-season-flavored
-    projections without any preset switching required.
-    """
-    args = [
+# Fangraphs CLI no longer has mode flags. Every invocation pulls all three
+# projection slots (projections, projs_updated, ros) — see commit c7cfa2e
+# in the Fangraphs_API_Extractor repo. Mode-conditional flag plumbing
+# (--winter-meetings, --predraft, --ros) has been removed; year-round
+# default invocation is correct.
+fangraphs_extractor = cli_task(
+    "fangraphs-api-extractor",
+    project_dir="_extract/Fangraphs_API_Extractor",
+    command=[
         "fangraphs-api-extractor",
         "--year",
-        str(year),
+        "{year}",
         "--output-dir",
         str(EXTRACT_OUTPUT_DIR),
-    ]
-    if preseason:
-        args.append("--winter-meetings")
-    shell.run_uv_cli("_extract/Fangraphs_API_Extractor", *args)
+    ],
+    retries=3,
+    retry_delay_seconds=[30, 120, 600],
+)
 
 
 savant_extractor = cli_task(
@@ -85,11 +78,16 @@ savant_extractor = cli_task(
 
 
 @flow(name="extract", log_prints=True)
-def extract(year: int, season: int, preseason: bool) -> None:
-    """Run all three extractors concurrently. Any failure fails the subflow."""
+def extract(year: int, season: int) -> None:
+    """Run all three extractors concurrently. Any failure fails the subflow.
+
+    `season` differs from `year` only in preseason mode (year - 1 for Savant);
+    full_pipeline does that derivation upstream. Fangraphs no longer needs to
+    know about preseason mode — its CLI handles slot selection internally.
+    """
     futures = [
         espn_api_extractor.submit(year),
-        fangraphs_extractor.submit(year=year, preseason=preseason),
+        fangraphs_extractor.submit(year=year),
         savant_extractor.submit(season=season),
     ]
     for f in futures:

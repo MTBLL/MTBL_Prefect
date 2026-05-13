@@ -30,11 +30,7 @@ def test_full_pipeline_preseason_dispatches_all_pipes(monkeypatch):
     # All extractors invoked
     assert any("ESPN_API_Extractor" in p and "players-extract" in a for p, a in calls)
     assert any("ESPN_API_Extractor" in p and "league-extract" in a for p, a in calls)
-    # Fangraphs gets --winter-meetings in preseason mode
-    assert any(
-        "Fangraphs_API_Extractor" in p and "--winter-meetings" in a
-        for p, a in calls
-    )
+    assert any("Fangraphs_API_Extractor" in p for p, _ in calls)
     # Savant uses year-1 in preseason
     assert any("Savant_API_Extractor" in p and "2024" in a for p, a in calls)
 
@@ -60,9 +56,8 @@ def test_full_pipeline_preseason_dispatches_all_pipes(monkeypatch):
     assert transform_last < load_first, "transform must finish before load starts"
 
 
-def test_full_pipeline_in_season_omits_mode_flag_for_fangraphs(monkeypatch):
-    """In-season run (no --preseason) should NOT pass --winter-meetings to Fangraphs;
-    the regular-season default mix handles rest-of-season behavior on its own."""
+def test_full_pipeline_in_season_savant_uses_current_year(monkeypatch):
+    """In-season run (no --preseason): Savant's --season equals --year."""
     calls: list[tuple[str, str]] = []
 
     def fake_run_uv_cli(project_dir, *args, allow_exit_code_1=False):
@@ -72,10 +67,7 @@ def test_full_pipeline_in_season_omits_mode_flag_for_fangraphs(monkeypatch):
 
     full_pipeline(year=2026, preseason=False)
 
-    # Fangraphs gets no mode flag in-season (default mix handles rest-of-season behavior)
-    assert any(
-        "Fangraphs_API_Extractor" in p and "--winter-meetings" not in a
-        for p, a in calls
-    )
     # Savant uses --season equal to --year when not in preseason
     assert any("Savant_API_Extractor" in p and "2026" in a for p, a in calls)
+    # Fangraphs invoked (no mode flag — the CLI handles all projection slots itself)
+    assert any("Fangraphs_API_Extractor" in p for p, _ in calls)
