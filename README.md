@@ -86,8 +86,6 @@ Notes on the irregular cases:
 - **ESPN players-extract always gets `--force-full-extraction`** — orchestrator hardcode; ensures a full pull rather than ESPN's GraphQL-optimized partial. Override by editing `flows/extract.py:espn_api_extractor`.
 - **Fangraphs takes no mode flag** — the CLI pulls all three projection slots (`projections`, `projs_updated`, `ros`) on every run regardless of season context. Source mix customization (`--batter-sources`, `--pitcher-sources`, `--weights`, `--winter-meetings`) is NOT exposed at the orchestrator level; defaults apply. Edit `flows/extract.py:fangraphs_extractor` if you need to override.
 - **MTBL_Valuations receives no flags** — the CLI reads files from the transform output directory directly. `hydrate` is the subcommand; everything else is implicit from filesystem state.
-- **Player_Universe_Trx's exit code 1 on success is a known sub-project quirk** — whitelisted at the orchestrator (`allow_exit_code_1=True` in `flows/transform.py`). See TDD §6.6.
-
 ### Where flag VALUES come from
 
 | Value | Source | Notes |

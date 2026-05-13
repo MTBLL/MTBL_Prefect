@@ -13,7 +13,6 @@ player_universe_trx = cli_task(
     command=["universe-trx", "--year", "{year}"],
     retries=1,
     retry_delay_seconds=30,
-    allow_exit_code_1=True,
 )
 
 
