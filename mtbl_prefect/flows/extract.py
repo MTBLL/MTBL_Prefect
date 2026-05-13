@@ -42,6 +42,11 @@ def espn_api_extractor(year: int) -> None:
     )
 
 
+# Fangraphs CLI no longer has mode flags. Every invocation pulls all three
+# projection slots (projections, projs_updated, ros) — see commit c7cfa2e
+# in the Fangraphs_API_Extractor repo. Mode-conditional flag plumbing
+# (--winter-meetings, --predraft, --ros) has been removed; year-round
+# default invocation is correct.
 fangraphs_extractor = cli_task(
     "fangraphs-api-extractor",
     project_dir="_extract/Fangraphs_API_Extractor",
@@ -74,7 +79,12 @@ savant_extractor = cli_task(
 
 @flow(name="extract", log_prints=True)
 def extract(year: int, season: int) -> None:
-    """Run all three extractors concurrently. Any failure fails the subflow."""
+    """Run all three extractors concurrently. Any failure fails the subflow.
+
+    `season` differs from `year` only in preseason mode (year - 1 for Savant);
+    full_pipeline does that derivation upstream. Fangraphs no longer needs to
+    know about preseason mode — its CLI handles slot selection internally.
+    """
     futures = [
         espn_api_extractor.submit(year),
         fangraphs_extractor.submit(year=year),

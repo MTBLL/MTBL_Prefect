@@ -54,3 +54,20 @@ def test_full_pipeline_preseason_dispatches_all_pipes(monkeypatch):
 
     assert extract_last < transform_first, "extract must finish before transform starts"
     assert transform_last < load_first, "transform must finish before load starts"
+
+
+def test_full_pipeline_in_season_savant_uses_current_year(monkeypatch):
+    """In-season run (no --preseason): Savant's --season equals --year."""
+    calls: list[tuple[str, str]] = []
+
+    def fake_run_uv_cli(project_dir, *args, allow_exit_code_1=False):
+        calls.append((project_dir, " ".join(str(a) for a in args)))
+
+    monkeypatch.setattr(shell, "run_uv_cli", fake_run_uv_cli)
+
+    full_pipeline(year=2026, preseason=False)
+
+    # Savant uses --season equal to --year when not in preseason
+    assert any("Savant_API_Extractor" in p and "2026" in a for p, a in calls)
+    # Fangraphs invoked (no mode flag — the CLI handles all projection slots itself)
+    assert any("Fangraphs_API_Extractor" in p for p, _ in calls)
