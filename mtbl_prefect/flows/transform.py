@@ -1,14 +1,14 @@
 """Transform subflow: universe-trx then mtbl-valuations, sequential.
 
-After mtbl-valuations runs, its per-run iteration summary logs are attached
-to the flow run as a Prefect artifact so each run's convergence / warnings
-trace is reviewable in the UI alongside the logs.
+After mtbl-valuations runs, its per-run iteration summary logs are parsed and
+attached to the flow run as native Prefect table artifacts (convergence +
+warnings) so each run's trace is reviewable in the UI.
 """
 
 from __future__ import annotations
 
 from prefect import flow, task
-from prefect.artifacts import create_markdown_artifact
+from prefect.artifacts import create_table_artifact
 
 from mtbl_prefect.config import REPO_ROOT
 from mtbl_prefect.tasks.shell import cli_task
@@ -19,6 +19,13 @@ from mtbl_prefect.tasks.shell import cli_task
 # preseason, ros, synthetic, updated). Path is hardcoded — it is a fixed,
 # known location inside the sub-project repo.
 VALUATIONS_LOGS_DIR = REPO_ROOT / "_transform/MTBL_Valuations/logs"
+
+# Column layout of the two whitespace-aligned tables in every *_summary.log.
+# The last warnings column (msg) is free text, so it is split off last.
+CONVERGENCE_COLS = (
+    "source", "phase", "pos", "iters_run", "converged", "oscillating", "best_iter"
+)
+WARNINGS_COLS = ("source", "phase", "pos", "iter", "kind", "msg")
 
 
 player_universe_trx = cli_task(
@@ -39,15 +46,46 @@ mtbl_valuations = cli_task(
 )
 
 
+def _rows_under(lines: list[str], marker: str, ncols: int) -> list[list[str]]:
+    """Parse the whitespace-aligned table under `marker` in a summary log.
+
+    Layout is fixed: a marker line (e.g. ``CONVERGENCE`` or ``WARNINGS (44)``),
+    a dashed rule, a column-header line, then data rows up to the first blank
+    line. Each row is split into exactly `ncols` fields — the final field
+    keeps any internal spaces (the warnings ``msg`` column is free text).
+    Returns [] if the marker is absent.
+    """
+    start = None
+    for i, line in enumerate(lines):
+        text = line.strip()
+        if text == marker or text.startswith(marker + " "):
+            start = i
+            break
+    if start is None:
+        return []
+
+    rows: list[list[str]] = []
+    # +3 skips the marker line, the dashed rule, and the column header.
+    for line in lines[start + 3:]:
+        if not line.strip():
+            break
+        fields = line.split(maxsplit=ncols - 1)
+        if len(fields) < ncols:
+            fields += [""] * (ncols - len(fields))
+        rows.append(fields)
+    return rows
+
+
 @task(name="publish-valuations-iteration-logs", log_prints=True)
 def publish_valuations_logs() -> None:
-    """Attach the most recent mtbl-valuations iteration summaries as an artifact.
+    """Publish the latest mtbl-valuations iteration logs as table artifacts.
 
-    Reads every `*_summary.log` from the newest `logs/<timestamp>/` directory
-    and pins them to the flow run as one markdown artifact, keyed so each run
-    forms a reviewable history in the UI.
+    Parses the newest `logs/<timestamp>/` directory's `*_summary.log` files
+    into two native Prefect table artifacts — convergence and warnings —
+    pooled across all valuation sources (the `source` column distinguishes
+    them). Native tables sidestep the UI's markdown code-block rendering.
 
-    Best-effort: a missing directory or read error is logged and swallowed —
+    Best-effort: a missing directory or parse error is logged and swallowed —
     a logging hiccup must never fail the transform.
     """
     try:
@@ -62,26 +100,30 @@ def publish_valuations_logs() -> None:
             print(f"No *_summary.log files in {latest}")
             return
 
-        sections = [
-            f"# mtbl-valuations iteration logs\n\n_Run directory: `{latest.name}`_\n"
-        ]
+        convergence: list[dict[str, str]] = []
+        warnings: list[dict[str, str]] = []
         for summary in summaries:
-            # Fence tagged `text`: these are plain log dumps, not code. Without
-            # a language the Prefect UI's markdown renderer auto-highlights the
-            # block — light syntax-theme tokens on the dark code background
-            # render illegibly. `text` tells the highlighter to leave it alone.
-            sections.append(
-                f"## {summary.stem}\n\n```text\n{summary.read_text()}\n```\n"
-            )
+            lines = summary.read_text().splitlines()
+            for fields in _rows_under(lines, "CONVERGENCE", len(CONVERGENCE_COLS)):
+                convergence.append(dict(zip(CONVERGENCE_COLS, fields)))
+            for fields in _rows_under(lines, "WARNINGS", len(WARNINGS_COLS)):
+                warnings.append(dict(zip(WARNINGS_COLS, fields)))
 
-        create_markdown_artifact(
-            key="mtbl-valuations-iteration-logs",
-            markdown="\n".join(sections),
-            description=f"Convergence / warnings summaries — run {latest.name}",
-        )
+        if convergence:
+            create_table_artifact(
+                key="mtbl-valuations-convergence",
+                table=convergence,
+                description=f"Per-position convergence — run {latest.name}",
+            )
+        if warnings:
+            create_table_artifact(
+                key="mtbl-valuations-warnings",
+                table=warnings,
+                description=f"Iteration warnings — run {latest.name}",
+            )
         print(
-            f"Published {len(summaries)} valuation summary log(s) "
-            f"from {latest.name} as a Prefect artifact"
+            f"Published convergence ({len(convergence)} rows) + "
+            f"warnings ({len(warnings)} rows) from {latest.name}"
         )
     except Exception as exc:  # noqa: BLE001 — logging is strictly best-effort
         print(f"WARNING: could not publish valuations iteration logs: {exc}")
