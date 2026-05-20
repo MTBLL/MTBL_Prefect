@@ -43,6 +43,11 @@ services:
       PREFECT_SERVER_API_HOST: 0.0.0.0
       PREFECT_UI_URL: http://localhost:4200
       PREFECT_API_URL: http://localhost:4200/api
+      # Serve the new React UI v2 (TanStack/Vite rewrite). Ships inside the
+      # 3-latest image behind this flag; default is still the legacy UI.
+      PREFECT_SERVER_UI_V2_ENABLED: "true"
+      # Mute the Prefect Cloud upsell banners in the self-hosted UI.
+      PREFECT_SERVER_UI_SHOW_PROMOTIONAL_CONTENT: "false"
     ports:
       - "4200:4200"
     restart: unless-stopped
