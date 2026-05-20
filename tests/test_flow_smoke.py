@@ -14,7 +14,7 @@ from mtbl_prefect.tasks import shell
 def test_full_pipeline_preseason_dispatches_all_pipes(monkeypatch):
     calls: list[tuple[str, str]] = []
 
-    def fake_run_uv_cli(project_dir, *args, allow_exit_code_1=False):
+    def fake_run_uv_cli(project_dir, *args):
         calls.append((project_dir, " ".join(str(a) for a in args)))
 
     monkeypatch.setattr(shell, "run_uv_cli", fake_run_uv_cli)
@@ -60,7 +60,7 @@ def test_full_pipeline_in_season_savant_uses_current_year(monkeypatch):
     """In-season run (no --preseason): Savant's --season equals --year."""
     calls: list[tuple[str, str]] = []
 
-    def fake_run_uv_cli(project_dir, *args, allow_exit_code_1=False):
+    def fake_run_uv_cli(project_dir, *args):
         calls.append((project_dir, " ".join(str(a) for a in args)))
 
     monkeypatch.setattr(shell, "run_uv_cli", fake_run_uv_cli)

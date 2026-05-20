@@ -40,12 +40,8 @@ def test_run_uv_cli_raises_on_nonzero(monkeypatch):
         shell.run_uv_cli("_extract/X", "fakecli")
 
 
-def test_run_uv_cli_allows_exit_1_when_whitelisted(monkeypatch):
-    monkeypatch.setattr(shell.subprocess, "run", _fake_run(1))
-    shell.run_uv_cli("_transform/Player_Universe_Trx", "universe-trx", allow_exit_code_1=True)
-
-
-def test_run_uv_cli_rejects_exit_1_by_default(monkeypatch):
+def test_run_uv_cli_rejects_exit_1(monkeypatch):
+    """Exit code 1 is a real failure — no more universe-trx whitelist (MTBL-153)."""
     monkeypatch.setattr(shell.subprocess, "run", _fake_run(1))
     with pytest.raises(RuntimeError, match="exit code 1"):
         shell.run_uv_cli("_extract/X", "fakecli")
@@ -61,29 +57,6 @@ def test_cli_task_interpolates_kwargs(monkeypatch):
     )
     t.fn(year=2026)
     assert "2026" in fake.last_cmd
-
-
-def test_cli_task_passes_through_allow_exit_code_1(monkeypatch):
-    monkeypatch.setattr(shell.subprocess, "run", _fake_run(1))
-    t = shell.cli_task(
-        "test",
-        project_dir="_transform/Player_Universe_Trx",
-        command=["universe-trx"],
-        allow_exit_code_1=True,
-    )
-    t.fn()
-
-
-def test_cli_task_rejects_other_failures_when_whitelisted(monkeypatch):
-    monkeypatch.setattr(shell.subprocess, "run", _fake_run(2))
-    t = shell.cli_task(
-        "test",
-        project_dir="_extract/X",
-        command=["fakecli"],
-        allow_exit_code_1=True,
-    )
-    with pytest.raises(RuntimeError, match="exit code 2"):
-        t.fn()
 
 
 # Container-mode behavior

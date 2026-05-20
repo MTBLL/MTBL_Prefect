@@ -74,11 +74,16 @@ def _retry_only_transient(task, task_run, state) -> bool:
     return _RETRYABLE_MARKER in (state.message or "")
 
 
-def run_uv_cli(project_dir: str, *args: str, allow_exit_code_1: bool = False) -> None:
+def run_uv_cli(project_dir: str, *args: str) -> None:
     """Run `uv run --directory <REPO_ROOT/project_dir> <args>` as a subprocess.
 
     Stderr is captured (then echoed) so we can classify the failure mode.
     Stdout streams through to the parent so progress is visible in real time.
+
+    Exit code 0 is success; anything else fails the task. (Earlier versions
+    of this helper accepted `allow_exit_code_1=True` to paper over the
+    universe-trx CLI's exit-code-1-on-success quirk — that quirk was fixed
+    upstream in MTBL-153 and the whitelist is gone.)
     """
     full_cmd = _build_cmd(project_dir, args)
     env = _build_env(project_dir)
@@ -90,9 +95,6 @@ def run_uv_cli(project_dir: str, *args: str, allow_exit_code_1: bool = False) ->
         print(result.stderr, end="", file=sys.stderr)
 
     if result.returncode == 0:
-        return
-    if allow_exit_code_1 and result.returncode == 1:
-        print("(treating exit code 1 as success — known CLI quirk)")
         return
 
     cmd_str = " ".join(full_cmd)
@@ -113,7 +115,6 @@ def cli_task(
     command: list[str],
     retries: int = 0,
     retry_delay_seconds: list[int] | int = 0,
-    allow_exit_code_1: bool = False,
 ) -> Callable[..., None]:
     """Build a Prefect @task wrapping a single uv-run CLI invocation.
 
@@ -123,9 +124,6 @@ def cli_task(
     Retries fire only for transient (network/HTTP) failures — see
     _retry_only_transient. Permanent failures (build errors, validation,
     missing files) skip retries and fail the task immediately.
-
-    When allow_exit_code_1=True, exit code 1 is treated as success — workaround for
-    the universe-trx CLI bug; see Notion TDD §6.6.
     """
 
     @task(
@@ -137,6 +135,6 @@ def cli_task(
     )
     def _run(**kwargs: Any) -> None:
         resolved = [arg.format(**kwargs) if "{" in arg else arg for arg in command]
-        run_uv_cli(project_dir, *resolved, allow_exit_code_1=allow_exit_code_1)
+        run_uv_cli(project_dir, *resolved)
 
     return _run

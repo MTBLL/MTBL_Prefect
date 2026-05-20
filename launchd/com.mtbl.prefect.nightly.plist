@@ -12,13 +12,29 @@
         <string>cd /Users/Shared/BaseballHQ/tools/_orchestrate/MTBL_Prefect &amp;&amp; docker compose --profile runner run --rm runner full-pipeline --year $(date +%Y)</string>
     </array>
 
+    <!-- Two runs per day, both America/Denver wall-clock. launchd fires on
+         the system clock (TZ America/Denver), so both track the MDT/MST
+         shift automatically and hold their local time year-round.
+
+         00:16 — captures the prior day's completed games. Surfaces who to
+                 target on waivers before claims process.
+         09:05 — captures that day's waiver activity (claims clear at 09:00).
+                 Post-waiver roster state is loaded in time to set lineups. -->
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>0</integer>
-        <key>Minute</key>
-        <integer>16</integer>
-    </dict>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>0</integer>
+            <key>Minute</key>
+            <integer>16</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>5</integer>
+        </dict>
+    </array>
 
     <key>RunAtLoad</key>
     <false/>

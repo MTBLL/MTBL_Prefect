@@ -1,8 +1,17 @@
-# Nightly scheduling — LaunchAgent + pmset wake
+# Pipeline scheduling — LaunchAgent + pmset wake
 
-This directory contains the macOS LaunchAgent that fires the MTBL Prefect pipeline nightly at **00:16 America/Denver**, plus install/uninstall helpers.
+This directory contains the macOS LaunchAgent that fires the MTBL Prefect pipeline **twice a day, both America/Denver wall-clock**, plus install/uninstall helpers.
 
-Why LaunchAgent over `cron`: macOS `cron` does not fire missed jobs when the Mac is asleep at the scheduled time — the run is silently skipped. `launchd` fires on wake; paired with `pmset` we wake the Mac just before the agent fires, so the run is reliable even when the laptop is closed overnight.
+| Run | Why |
+|---|---|
+| **00:16** | Captures the prior day's completed games. Surfaces who to target on waivers before claims process. |
+| **09:05** | Captures that day's waiver activity (league claims clear at 09:00). Post-waiver roster state is loaded in time to set lineups for the day. |
+
+Both fire times live in a single `StartCalendarInterval` array on one agent — one job, two triggers, shared `ProgramArguments` and log files. launchd fires on the system clock (TZ `America/Denver`), so both runs track the MDT/MST shift automatically and hold their local wall-clock year-round.
+
+> The agent's `Label`, plist filename, and log files still read `nightly` — a historical name from when there was only the midnight run. Harmless; just don't read it as "runs once."
+
+Why LaunchAgent over `cron`: macOS `cron` does not fire missed jobs when the Mac is asleep at the scheduled time — the run is silently skipped. `launchd` instead fires on wake: a job whose scheduled time passed while the Mac slept runs as soon as it wakes. Paired with `pmset` we also wake the Mac just before the **00:16** fire, so the overnight run is reliable even when the laptop is closed. The 09:05 run relies on the Mac being awake (typical for a workday morning) or on launchd's fire-on-wake catch-up — see the `pmset` note below.
 
 ## Install
 
@@ -26,6 +35,8 @@ sudo pmset repeat wakeorpoweron MTWRFSU 00:14:00
 
 `MTWRFSU` = Mon, Tue, Wed, Thu, Fri, Sat, Sun (macOS's weekday letter codes). `wakeorpoweron` wakes from sleep AND turns on from soft-off. The 2-minute lead time gives Docker Desktop a moment to settle after wake before the LaunchAgent fires the run at 00:16.
 
+This `pmset` wake covers the **00:16** run only — `pmset repeat` supports a single repeating wake event. The **09:05** run is not wake-scheduled: if the Mac is awake it fires on time; if asleep, launchd runs it on the next wake (open the lid → the run fires → fresh data lands ~5–15 min later, still in time to set lineups). No second `pmset` entry is needed for the morning run.
+
 ## Verify install
 
 ```
@@ -40,7 +51,7 @@ If `launchctl print` returns `Could not find service`, the agent isn't loaded �
 
 ## Trigger a run on demand (kickstart)
 
-Use this to fire the pipeline immediately instead of waiting for 00:16. It's the single most useful command in this whole setup — for verification after install, dry-running code changes, and re-running after a fixed failure.
+Use this to fire the pipeline immediately instead of waiting for the next scheduled run (00:16 or 09:05). It's the single most useful command in this whole setup — for verification after install, dry-running code changes, and re-running after a fixed failure.
 
 ### The command
 
@@ -87,13 +98,13 @@ On failure, you'll see a `:x: MTBL pipeline ... failed: ...` message in Slack an
 ### When to use kickstart
 
 - **After install** — verify the LaunchAgent + Docker chain end-to-end without waiting overnight
-- **After deploying code changes** — validate behavior before tonight's 00:16 fire (especially after touching `mtbl_prefect/`, sub-project repos, or anything bind-mounted into the runner)
+- **After deploying code changes** — validate behavior before the next scheduled fire (especially after touching `mtbl_prefect/`, sub-project repos, or anything bind-mounted into the runner)
 - **After a failed nightly run** — once you've identified and fixed the cause, re-run immediately rather than waiting another night
 - **Anytime you want a flow run to happen NOW** — there is no other "run the pipeline now" command worth memorizing; this is the one
 
 ### What `kickstart -k` does NOT do
 
-- **Does not change the 00:16 schedule** — the next nightly fire still happens as configured
+- **Does not change the schedule** — the next scheduled fire (00:16 / 09:05) still happens as configured
 - **Does not bypass pmset** — kickstart only works if the Mac is awake (or the LaunchAgent is already loaded and idle)
 - **Does not restart persistent Docker services** — `prefect-server`, `postgres`, and `fantasy-pg` keep running between fires regardless of kickstart activity
 - **Does not require the previous run to have finished cleanly** — `-k` kills any in-progress run first
@@ -122,8 +133,8 @@ The acceptance criterion requires running the new Prefect pipeline alongside the
 
 Recommended setup:
 
-1. **Keep Prefect at 00:16 nightly** (this LaunchAgent, already installed).
-2. **Schedule the bash runner at a non-conflicting time**, e.g. 06:00 MST. The bash runner writes to the same Postgres + Neon target, so running it AFTER the Prefect run lets you compare "did the bash version land the same data as Prefect did 6 hours earlier".
+1. **Keep Prefect on its schedule** — 00:16 + 09:05 (this LaunchAgent, already installed).
+2. **Schedule the bash runner at a non-conflicting time**, e.g. 06:00 MST — between the two Prefect runs. The bash runner writes to the same Postgres + Neon target, so running it AFTER the 00:16 Prefect run lets you compare "did the bash version land the same data as Prefect did ~6 hours earlier".
 3. **Manual or scripted daily diff** — quick options:
     - Compare row counts in Neon: `SELECT COUNT(*) FROM players;` (etc.) at 05:55 vs 06:30
     - Compare extract output file sizes / line counts in `/Users/Shared/BaseballHQ/resources/extract/`
@@ -158,10 +169,12 @@ Removes the plist from `~/Library/LaunchAgents/` and boots it out of launchd. Do
 
 **Agent fires but `docker compose` not found** — the LaunchAgent's `PATH` doesn't include the Docker Desktop binary location. Default in the plist is `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` which covers both Apple Silicon and Intel Homebrew. If your Docker install lives elsewhere, edit the `<key>PATH</key>` value in the plist + re-install.
 
-**Agent does not fire at 00:16** — first check `pmset -g log | tail -50` to see whether the Mac actually woke at 00:14 or went deeper into sleep. If wake didn't happen, `pmset` wasn't set or got reset by a macOS update. Re-run the `sudo pmset repeat wakeorpoweron MTWRFSU 00:14:00` command.
+**00:16 run does not fire** — first check `pmset -g log | tail -50` to see whether the Mac actually woke at 00:14 or went deeper into sleep. If wake didn't happen, `pmset` wasn't set or got reset by a macOS update. Re-run the `sudo pmset repeat wakeorpoweron MTWRFSU 00:14:00` command.
+
+**09:05 run does not fire** — this run has no `pmset` wake. If the Mac was asleep at 09:05, launchd runs the job on the next wake — check the log timestamp against when you opened the Mac. If it fired late but did fire, that's expected behavior, not a fault. If it never fired at all, confirm the agent is loaded (`launchctl print` — see Verify) and that `launchctl print` shows two `StartCalendarInterval` descriptors.
 
 **Logs grow unbounded** — file a follow-up to add `logrotate` or a simple cron+find rotation. Not load-bearing for short-term operation.
 
-**Need to change the schedule** — edit `com.mtbl.prefect.nightly.plist` `Hour`/`Minute` values, then re-run `./install.sh`. The bootout/bootstrap sequence picks up the new schedule.
+**Need to change the schedule** — `StartCalendarInterval` in `com.mtbl.prefect.nightly.plist` is an `<array>` of `<dict>` entries, one per fire time. Edit a dict's `Hour`/`Minute`, add a dict for another run, or remove one, then re-run `./install.sh`. The bootout/bootstrap sequence picks up the new schedule. Verify with `launchctl print` — it should list one descriptor per fire time.
 
 **Want to disable temporarily** — `launchctl bootout gui/$(id -u)/com.mtbl.prefect.nightly` disables until re-bootstrapped. Doesn't delete the plist; re-running `./install.sh` re-enables.
