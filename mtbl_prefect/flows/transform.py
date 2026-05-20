@@ -66,7 +66,13 @@ def publish_valuations_logs() -> None:
             f"# mtbl-valuations iteration logs\n\n_Run directory: `{latest.name}`_\n"
         ]
         for summary in summaries:
-            sections.append(f"## {summary.stem}\n\n```\n{summary.read_text()}\n```\n")
+            # Fence tagged `text`: these are plain log dumps, not code. Without
+            # a language the Prefect UI's markdown renderer auto-highlights the
+            # block — light syntax-theme tokens on the dark code background
+            # render illegibly. `text` tells the highlighter to leave it alone.
+            sections.append(
+                f"## {summary.stem}\n\n```text\n{summary.read_text()}\n```\n"
+            )
 
         create_markdown_artifact(
             key="mtbl-valuations-iteration-logs",

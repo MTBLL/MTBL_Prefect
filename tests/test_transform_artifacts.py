@@ -44,6 +44,8 @@ def test_publishes_latest_run_summaries(tmp_path, monkeypatch, fake_artifact):
     assert len(fake_artifact) == 1
     art = fake_artifact[0]
     assert art["key"] == "mtbl-valuations-iteration-logs"
+    # Fences are tagged `text` so the UI renderer does not syntax-highlight them.
+    assert "```text" in art["markdown"]
     assert "current convergence trace" in art["markdown"]
     assert "ros convergence trace" in art["markdown"]
     assert "STALE" not in art["markdown"]
