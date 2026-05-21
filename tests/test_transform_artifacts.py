@@ -71,6 +71,18 @@ def _make_run_dir(logs_root, name, sources, mtime, *, with_detail=True):
     return run_dir
 
 
+def test_run_dir_names_snapshots(tmp_path, monkeypatch):
+    monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
+    (tmp_path / "20260101-000000").mkdir()
+    (tmp_path / "20260520-215321").mkdir()
+    assert transform._run_dir_names() == {"20260101-000000", "20260520-215321"}
+
+
+def test_run_dir_names_missing_root_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path / "missing")
+    assert transform._run_dir_names() == set()
+
+
 def test_aligned_table_reassembles_multiword_names():
     """The rostered table's multi-word name column survives the parse."""
     header = " rank             name         tier  total_z  R_raw   R_z"
@@ -88,10 +100,9 @@ def test_shards_artifacts_per_source_and_position(
     tmp_path, monkeypatch, fake_artifacts
 ):
     monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
-    _make_run_dir(tmp_path, "20260101-000000", ["current"], mtime=1000)
     _make_run_dir(tmp_path, "20260520-215321", ["current", "ros"], mtime=2000)
 
-    transform.publish_valuations_logs.fn()
+    transform.publish_valuations_logs.fn(run_dir_names=["20260520-215321"])
 
     by_key = {c["key"]: c for c in fake_artifacts}
     # Per source: one summary shard + one shard per position (here just C).
@@ -105,8 +116,7 @@ def test_shards_artifacts_per_source_and_position(
     summary = by_key["mtbl-valuations-logs-current-summary"]["markdown"]
     assert "### Convergence" in summary and "### Warnings" in summary
     assert "| source | phase | pos | iters_run | converged | oscillating | best_iter |" in summary
-    # The summary shard carries no per-position detail.
-    assert "#### phase3b-iter" not in summary
+    assert "#### phase3b-iter" not in summary  # summary shard carries no detail
 
     pos = by_key["mtbl-valuations-logs-current-c"]["markdown"]
     assert "# mtbl-valuations — current / C" in pos
@@ -119,16 +129,35 @@ def test_shards_artifacts_per_source_and_position(
         assert "```" not in art["markdown"] and "<pre" not in art["markdown"]
 
 
-def test_no_logs_dir_is_noop(tmp_path, monkeypatch, fake_artifacts):
-    monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path / "missing")
-    transform.publish_valuations_logs.fn()
+def test_ignores_dirs_not_from_this_run(tmp_path, monkeypatch, fake_artifacts):
+    """A newer directory from an overlapping run must not be published."""
+    monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
+    # This run's dir (older) and a concurrent run's dir (newer by mtime).
+    _make_run_dir(tmp_path, "20260520-100000", ["current"], mtime=1000)
+    _make_run_dir(tmp_path, "20260520-200000", ["current"], mtime=2000)
+
+    # Only this run's directory name is passed in.
+    transform.publish_valuations_logs.fn(run_dir_names=["20260520-100000"])
+
+    # Despite the other dir being newer, artifacts come from this run's dir.
+    assert fake_artifacts
+    for art in fake_artifacts:
+        assert "20260520-100000" in art["description"]
+        assert "20260520-200000" not in art["description"]
+
+
+def test_no_run_dir_is_noop(tmp_path, monkeypatch, fake_artifacts):
+    """Naming a directory that does not exist publishes nothing — never raises."""
+    monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
+    transform.publish_valuations_logs.fn(run_dir_names=["20260520-999999"])
     assert fake_artifacts == []
 
 
 def test_empty_run_dir_is_noop(tmp_path, monkeypatch, fake_artifacts):
+    """A run directory with no *_summary.log files publishes nothing."""
     monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
     (tmp_path / "20260520-215321").mkdir()
-    transform.publish_valuations_logs.fn()
+    transform.publish_valuations_logs.fn(run_dir_names=["20260520-215321"])
     assert fake_artifacts == []
 
 
@@ -136,7 +165,7 @@ def test_summary_without_detail_dir_still_publishes(tmp_path, monkeypatch, fake_
     """A source with no per-position detail still gets its summary shard."""
     monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
     _make_run_dir(tmp_path, "20260520-215321", ["current"], mtime=2000, with_detail=False)
-    transform.publish_valuations_logs.fn()
+    transform.publish_valuations_logs.fn(run_dir_names=["20260520-215321"])
     assert len(fake_artifacts) == 1
     assert fake_artifacts[0]["key"] == "mtbl-valuations-logs-current-summary"
     assert "### Convergence" in fake_artifacts[0]["markdown"]

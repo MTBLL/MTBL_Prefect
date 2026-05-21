@@ -83,9 +83,10 @@ def run_uv_cli(project_dir: str, *args: str) -> None:
     logs in the UI. Re-emitting each line via `print()` puts it back inside
     that capture — every line of pipe output now lands in Prefect's logs.
 
-    Exit code 0 is success; anything else fails the task. The merged output is
-    scanned for transient-failure markers (see TRANSIENT_PATTERNS) to decide
-    whether the RuntimeError is tagged retryable.
+    Exit code 0 is success; anything else fails the task. Each line is scanned
+    for transient-failure markers (see TRANSIENT_PATTERNS) as it streams — the
+    result is OR-folded into a flag, so the full output is never retained in
+    memory (a verbose CLI could otherwise grow an unbounded buffer).
 
     (Earlier versions accepted `allow_exit_code_1=True` to paper over the
     universe-trx CLI's exit-code-1-on-success quirk — fixed upstream in
@@ -103,20 +104,23 @@ def run_uv_cli(project_dir: str, *args: str) -> None:
         text=True,
         bufsize=1,
     )
-    # Drain the merged stream live so progress shows in the logs in real time
-    # rather than arriving in one block when the process exits.
-    captured: list[str] = []
+    # Drain the merged stream live so progress shows in the logs in real time.
+    # The transient-failure check is incremental — each line is tested as it
+    # streams and folded into a flag — so no output is buffered (a verbose CLI
+    # would otherwise grow an unbounded list just to be scanned once at exit).
+    transient = False
     assert proc.stdout is not None
     for line in proc.stdout:
         print(line, end="")
-        captured.append(line)
+        if not transient and _looks_transient(line):
+            transient = True
     returncode = proc.wait()
 
     if returncode == 0:
         return
 
     cmd_str = " ".join(full_cmd)
-    if _looks_transient("".join(captured)):
+    if transient:
         raise RuntimeError(
             f"{_RETRYABLE_MARKER} command failed with exit code "
             f"{returncode}: {cmd_str}"

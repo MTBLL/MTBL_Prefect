@@ -188,9 +188,28 @@ def _render_position_log(text: str) -> str:
     return "\n\n".join(out)
 
 
+def _run_dir_names() -> set[str]:
+    """Snapshot the run-directory names currently under the logs root.
+
+    The transform flow takes this snapshot before and after mtbl-valuations;
+    the difference is the directory this run produced — which scopes the
+    artifact publish to this run rather than a global newest-by-mtime pick.
+    """
+    try:
+        return {d.name for d in VALUATIONS_LOGS_DIR.iterdir() if d.is_dir()}
+    except FileNotFoundError:
+        return set()
+
+
 @task(name="publish-valuations-iteration-logs", log_prints=True)
-def publish_valuations_logs() -> None:
-    """Publish the latest mtbl-valuations run's logs, sharded per position.
+def publish_valuations_logs(run_dir_names: list[str] | None = None) -> None:
+    """Publish this run's mtbl-valuations logs, sharded per position.
+
+    `run_dir_names` is the run-directory name(s) that appeared while
+    mtbl-valuations ran — the flow resolves this by diffing before/after
+    snapshots of the logs root around the mtbl-valuations call. Selecting from
+    that set (rather than a global newest-by-mtime) keeps an overlapping run
+    from misdirecting the artifacts.
 
     Prefect artifacts are flat — there are no directories — so the key encodes
     the hierarchy: ``mtbl-valuations-logs-<source>-<position>``. Keys sort
@@ -204,12 +223,22 @@ def publish_valuations_logs() -> None:
     a logging hiccup must never fail the transform.
     """
     try:
-        run_dirs = [d for d in VALUATIONS_LOGS_DIR.iterdir() if d.is_dir()]
-        if not run_dirs:
-            print(f"No mtbl-valuations log runs under {VALUATIONS_LOGS_DIR}")
+        candidates = [
+            VALUATIONS_LOGS_DIR / name
+            for name in (run_dir_names or [])
+            if (VALUATIONS_LOGS_DIR / name).is_dir()
+        ]
+        if not candidates:
+            print(
+                "No mtbl-valuations log directory for this run under "
+                f"{VALUATIONS_LOGS_DIR}"
+            )
             return
 
-        latest = max(run_dirs, key=lambda d: d.stat().st_mtime)
+        # Normally exactly one directory appeared during this run; if an
+        # overlapping run also created one in the same window, the newest is
+        # the safest pick.
+        latest = max(candidates, key=lambda d: d.stat().st_mtime)
         summaries = sorted(latest.glob("*_summary.log"))
         if not summaries:
             print(f"No *_summary.log files in {latest}")
@@ -261,5 +290,9 @@ def publish_valuations_logs() -> None:
 @flow(name="transform", log_prints=True)
 def transform(year: int) -> None:
     player_universe_trx(year=year)
+    # Bracket mtbl-valuations with run-dir snapshots: the difference is the
+    # directory this run produced, which scopes the artifact publish to this
+    # run rather than whatever happens to be newest in a shared logs root.
+    before = _run_dir_names()
     mtbl_valuations()
-    publish_valuations_logs()
+    publish_valuations_logs(sorted(_run_dir_names() - before))
