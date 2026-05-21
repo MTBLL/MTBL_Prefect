@@ -1,10 +1,10 @@
 """Transform subflow: universe-trx then mtbl-valuations, sequential.
 
-After mtbl-valuations runs, its per-run iteration logs are rendered into one
-markdown artifact per valuation source. The logs' whitespace-aligned tables
-are converted to real markdown pipe tables and the section structure to
-headings — markdown tables and headings render correctly in the Prefect UI,
-unlike fenced code blocks.
+After mtbl-valuations runs, its per-run iteration logs are rendered into
+markdown artifacts — one per (source, position) shard plus a per-source
+summary. The logs' whitespace-aligned tables are converted to real markdown
+pipe tables and the section structure to headings — markdown tables and
+headings render correctly in the Prefect UI, unlike fenced code blocks.
 """
 
 from __future__ import annotations
@@ -190,11 +190,15 @@ def _render_position_log(text: str) -> str:
 
 @task(name="publish-valuations-iteration-logs", log_prints=True)
 def publish_valuations_logs() -> None:
-    """Publish the latest mtbl-valuations run's logs as per-source artifacts.
+    """Publish the latest mtbl-valuations run's logs, sharded per position.
 
-    One markdown artifact per valuation source: the source summary
-    (convergence + warnings tables) followed by every per-position iteration
-    log, all rendered as markdown headings + pipe tables.
+    Prefect artifacts are flat — there are no directories — so the key encodes
+    the hierarchy: ``mtbl-valuations-logs-<source>-<position>``. Keys sort
+    alphabetically in the UI, so a source's shards cluster together.
+
+    Per valuation source: one summary artifact (convergence + warnings) plus
+    one artifact per fielding position. Sharding keeps each artifact small so
+    it renders fast — a single combined per-source document was too large.
 
     Best-effort: a missing directory or parse error is logged and swallowed —
     a logging hiccup must never fail the transform.
@@ -214,27 +218,40 @@ def publish_valuations_logs() -> None:
         published = 0
         for summary in summaries:
             source = summary.stem.removesuffix("_summary")
-            parts = [
-                f"# mtbl-valuations — {source}",
-                f"_Run: `{latest.name}`_",
-                "## Summary",
-                _render_summary(summary.read_text()),
-            ]
-            detail_dir = latest / source
-            if detail_dir.is_dir():
-                for pos_log in sorted(detail_dir.glob("*.log")):
-                    parts.append(f"## {pos_log.stem} — iteration detail")
-                    parts.append(_render_position_log(pos_log.read_text()))
 
+            # One artifact for the source summary (convergence + warnings).
             create_markdown_artifact(
-                key=f"mtbl-valuations-logs-{source}",
-                markdown="\n\n".join(parts),
-                description=f"{source} iteration logs — run {latest.name}",
+                key=f"mtbl-valuations-logs-{source}-summary",
+                markdown="\n\n".join([
+                    f"# mtbl-valuations — {source} / summary",
+                    f"_Run: `{latest.name}`_",
+                    _render_summary(summary.read_text()),
+                ]),
+                description=f"{source} convergence + warnings — run {latest.name}",
             )
             published += 1
 
+            # One artifact per position — sharded so each renders fast.
+            detail_dir = latest / source
+            if detail_dir.is_dir():
+                for pos_log in sorted(detail_dir.glob("*.log")):
+                    position = pos_log.stem
+                    create_markdown_artifact(
+                        key=f"mtbl-valuations-logs-{source}-{position.lower()}",
+                        markdown="\n\n".join([
+                            f"# mtbl-valuations — {source} / {position}",
+                            f"_Run: `{latest.name}`_",
+                            _render_position_log(pos_log.read_text()),
+                        ]),
+                        description=(
+                            f"{source} / {position} iteration detail "
+                            f"— run {latest.name}"
+                        ),
+                    )
+                    published += 1
+
         print(
-            f"Published {published} per-source iteration-log artifact(s) "
+            f"Published {published} sharded iteration-log artifact(s) "
             f"from {latest.name}"
         )
     except Exception as exc:  # noqa: BLE001 — logging is strictly best-effort

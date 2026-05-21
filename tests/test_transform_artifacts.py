@@ -84,7 +84,7 @@ def test_aligned_table_reassembles_multiword_names():
     assert "| rank | name | tier | total_z | R_raw | R_z |" in md
 
 
-def test_publishes_one_artifact_per_source_as_markdown_tables(
+def test_shards_artifacts_per_source_and_position(
     tmp_path, monkeypatch, fake_artifacts
 ):
     monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
@@ -94,22 +94,29 @@ def test_publishes_one_artifact_per_source_as_markdown_tables(
     transform.publish_valuations_logs.fn()
 
     by_key = {c["key"]: c for c in fake_artifacts}
+    # Per source: one summary shard + one shard per position (here just C).
     assert set(by_key) == {
-        "mtbl-valuations-logs-current",
-        "mtbl-valuations-logs-ros",
+        "mtbl-valuations-logs-current-summary",
+        "mtbl-valuations-logs-current-c",
+        "mtbl-valuations-logs-ros-summary",
+        "mtbl-valuations-logs-ros-c",
     }
 
-    md = by_key["mtbl-valuations-logs-current"]["markdown"]
-    # Summary tables rendered as markdown pipe tables.
-    assert "### Convergence" in md and "### Warnings" in md
-    assert "| source | phase | pos | iters_run | converged | oscillating | best_iter |" in md
-    # Per-position detail: heading + both tables, multi-word name intact.
-    assert "## C — iteration detail" in md
-    assert "#### phase3b-iter · C · iter 1" in md
-    assert "**RLP / scale**" in md and "**rostered + replacement**" in md
-    assert "| Ben Rice |" in md
+    summary = by_key["mtbl-valuations-logs-current-summary"]["markdown"]
+    assert "### Convergence" in summary and "### Warnings" in summary
+    assert "| source | phase | pos | iters_run | converged | oscillating | best_iter |" in summary
+    # The summary shard carries no per-position detail.
+    assert "#### phase3b-iter" not in summary
+
+    pos = by_key["mtbl-valuations-logs-current-c"]["markdown"]
+    assert "# mtbl-valuations — current / C" in pos
+    assert "#### phase3b-iter · C · iter 1" in pos
+    assert "**RLP / scale**" in pos and "**rostered + replacement**" in pos
+    assert "| Ben Rice |" in pos
+
     # No code fences anywhere — that was the broken render path.
-    assert "```" not in md and "<pre" not in md
+    for art in fake_artifacts:
+        assert "```" not in art["markdown"] and "<pre" not in art["markdown"]
 
 
 def test_no_logs_dir_is_noop(tmp_path, monkeypatch, fake_artifacts):
@@ -126,8 +133,10 @@ def test_empty_run_dir_is_noop(tmp_path, monkeypatch, fake_artifacts):
 
 
 def test_summary_without_detail_dir_still_publishes(tmp_path, monkeypatch, fake_artifacts):
+    """A source with no per-position detail still gets its summary shard."""
     monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
     _make_run_dir(tmp_path, "20260520-215321", ["current"], mtime=2000, with_detail=False)
     transform.publish_valuations_logs.fn()
     assert len(fake_artifacts) == 1
+    assert fake_artifacts[0]["key"] == "mtbl-valuations-logs-current-summary"
     assert "### Convergence" in fake_artifacts[0]["markdown"]
