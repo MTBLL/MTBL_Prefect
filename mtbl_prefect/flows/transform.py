@@ -1,31 +1,37 @@
 """Transform subflow: universe-trx then mtbl-valuations, sequential.
 
-After mtbl-valuations runs, its per-run iteration summary logs are parsed and
-attached to the flow run as native Prefect table artifacts (convergence +
-warnings) so each run's trace is reviewable in the UI.
+After mtbl-valuations runs, its per-run iteration logs (the source summaries
+plus the full per-position iteration detail) are attached to the flow run as
+one markdown artifact per valuation source, so each run's complete trace is
+reviewable in the UI.
 """
 
 from __future__ import annotations
 
+import html
+
 from prefect import flow, task
-from prefect.artifacts import create_table_artifact
+from prefect.artifacts import create_markdown_artifact
 
 from mtbl_prefect.config import REPO_ROOT
 from mtbl_prefect.tasks.shell import cli_task
 
 
 # mtbl-valuations writes a timestamped logs/<YYYYMMDD-HHMMSS>/ directory per
-# run, each holding one <source>_summary.log per valuation source (current,
-# preseason, ros, synthetic, updated). Path is hardcoded — it is a fixed,
-# known location inside the sub-project repo.
+# run: one <source>_summary.log per valuation source (current, preseason, ros,
+# synthetic, updated) plus a <source>/ subdirectory of per-position iteration
+# detail logs (C.log, 1B.log, ... SP.log, RP.log). Path is hardcoded — it is a
+# fixed, known location inside the sub-project repo.
 VALUATIONS_LOGS_DIR = REPO_ROOT / "_transform/MTBL_Valuations/logs"
 
-# Column layout of the two whitespace-aligned tables in every *_summary.log.
-# The last warnings column (msg) is free text, so it is split off last.
-CONVERGENCE_COLS = (
-    "source", "phase", "pos", "iters_run", "converged", "oscillating", "best_iter"
+# Inline-styled <pre>. A raw HTML <pre> element renders with browser-default
+# (or these) styles — it does NOT pick up Prefect UI v2's markdown code-block
+# CSS, which renders light-on-light. Markdown ``` fences hit that broken CSS;
+# a real <pre> element sidesteps it.
+_PRE_STYLE = (
+    "background:#1e1e2e;color:#e4e4e7;padding:12px;border-radius:6px;"
+    "overflow-x:auto;font-size:12px;line-height:1.45;"
 )
-WARNINGS_COLS = ("source", "phase", "pos", "iter", "kind", "msg")
 
 
 player_universe_trx = cli_task(
@@ -46,46 +52,26 @@ mtbl_valuations = cli_task(
 )
 
 
-def _rows_under(lines: list[str], marker: str, ncols: int) -> list[list[str]]:
-    """Parse the whitespace-aligned table under `marker` in a summary log.
+def _pre_block(text: str) -> str:
+    """Wrap raw log text in an inline-styled HTML <pre>.
 
-    Layout is fixed: a marker line (e.g. ``CONVERGENCE`` or ``WARNINGS (44)``),
-    a dashed rule, a column-header line, then data rows up to the first blank
-    line. Each row is split into exactly `ncols` fields — the final field
-    keeps any internal spaces (the warnings ``msg`` column is free text).
-    Returns [] if the marker is absent.
+    Content is HTML-escaped — the warning logs contain `>` and player names
+    that would otherwise break the markup. Using a real <pre> element rather
+    than a markdown ``` fence avoids Prefect UI v2's broken code-block theme.
     """
-    start = None
-    for i, line in enumerate(lines):
-        text = line.strip()
-        if text == marker or text.startswith(marker + " "):
-            start = i
-            break
-    if start is None:
-        return []
-
-    rows: list[list[str]] = []
-    # +3 skips the marker line, the dashed rule, and the column header.
-    for line in lines[start + 3:]:
-        if not line.strip():
-            break
-        fields = line.split(maxsplit=ncols - 1)
-        if len(fields) < ncols:
-            fields += [""] * (ncols - len(fields))
-        rows.append(fields)
-    return rows
+    return f'<pre style="{_PRE_STYLE}">{html.escape(text)}</pre>'
 
 
 @task(name="publish-valuations-iteration-logs", log_prints=True)
 def publish_valuations_logs() -> None:
-    """Publish the latest mtbl-valuations iteration logs as table artifacts.
+    """Publish the latest mtbl-valuations run's logs as per-source artifacts.
 
-    Parses the newest `logs/<timestamp>/` directory's `*_summary.log` files
-    into two native Prefect table artifacts — convergence and warnings —
-    pooled across all valuation sources (the `source` column distinguishes
-    them). Native tables sidestep the UI's markdown code-block rendering.
+    For each valuation source, one markdown artifact carries the source
+    summary plus every per-position iteration detail log, each embedded in a
+    raw <pre> block. One artifact per source keeps each well under any size
+    limit and groups them in the UI.
 
-    Best-effort: a missing directory or parse error is logged and swallowed —
+    Best-effort: a missing directory or read error is logged and swallowed —
     a logging hiccup must never fail the transform.
     """
     try:
@@ -100,30 +86,33 @@ def publish_valuations_logs() -> None:
             print(f"No *_summary.log files in {latest}")
             return
 
-        convergence: list[dict[str, str]] = []
-        warnings: list[dict[str, str]] = []
+        published = 0
         for summary in summaries:
-            lines = summary.read_text().splitlines()
-            for fields in _rows_under(lines, "CONVERGENCE", len(CONVERGENCE_COLS)):
-                convergence.append(dict(zip(CONVERGENCE_COLS, fields)))
-            for fields in _rows_under(lines, "WARNINGS", len(WARNINGS_COLS)):
-                warnings.append(dict(zip(WARNINGS_COLS, fields)))
+            source = summary.stem.removesuffix("_summary")
+            sections = [
+                f"# mtbl-valuations logs — {source}\n",
+                f"_Run: `{latest.name}`_\n",
+                "## Summary\n",
+                _pre_block(summary.read_text()),
+            ]
+            # Per-position iteration detail lives in a sibling directory named
+            # for the source (e.g. logs/<run>/current/C.log).
+            detail_dir = latest / source
+            if detail_dir.is_dir():
+                for pos_log in sorted(detail_dir.glob("*.log")):
+                    sections.append(f"\n## {pos_log.stem}\n")
+                    sections.append(_pre_block(pos_log.read_text()))
 
-        if convergence:
-            create_table_artifact(
-                key="mtbl-valuations-convergence",
-                table=convergence,
-                description=f"Per-position convergence — run {latest.name}",
+            create_markdown_artifact(
+                key=f"mtbl-valuations-logs-{source}",
+                markdown="\n".join(sections),
+                description=f"{source} iteration logs — run {latest.name}",
             )
-        if warnings:
-            create_table_artifact(
-                key="mtbl-valuations-warnings",
-                table=warnings,
-                description=f"Iteration warnings — run {latest.name}",
-            )
+            published += 1
+
         print(
-            f"Published convergence ({len(convergence)} rows) + "
-            f"warnings ({len(warnings)} rows) from {latest.name}"
+            f"Published {published} per-source iteration-log artifact(s) "
+            f"from {latest.name}"
         )
     except Exception as exc:  # noqa: BLE001 — logging is strictly best-effort
         print(f"WARNING: could not publish valuations iteration logs: {exc}")
