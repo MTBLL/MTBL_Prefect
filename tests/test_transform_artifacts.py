@@ -9,6 +9,45 @@ import pytest
 from mtbl_prefect.flows import transform
 
 
+_SUMMARY = """\
+=== source: {source} ===
+ts: 2026-05-20T21:31:45
+
+CONVERGENCE
+-----------
+ source          phase  pos  iters_run  converged  oscillating  best_iter
+{source}   phase3b-iter    C          5      False         True          2
+
+WARNINGS (1)
+------------
+ source          phase  pos  iter                   kind                  msg
+{source}   phase3b-iter    C     5   oscillation_resolved   period-2+ oscillation here
+"""
+
+# A per-position detail log: one iteration block with both tables. The
+# rostered table deliberately includes a multi-word player name.
+_POSITION_LOG = """\
+================================================================================
+PHASE: phase3b-iter   |   POS: C   |   ITER: 1   |   SOURCE: current
+================================================================================
+ts: 2026-05-20T21:53:22
+pool_size: 47  rostered: 11  replacement: 3  below: 33
+composition_hash: 2f5a9f2245
+
+RLP / scale (rostered tier basis, replacement-tier baseline):
+ cat  rostered_mean  rostered_stdev  rlp_raw_avg
+   R         25.636           8.920       19.667
+  HR          8.818           4.045        7.333
+
+rostered + replacement:
+ rank             name         tier  total_z  R_raw   R_z
+    1         Ben Rice     ROSTERED   17.325 36.000 2.466
+    2  William Contreras REPLACEMENT    4.268 23.000 1.009
+
+below_replacement: 33 (truncated)
+"""
+
+
 @pytest.fixture
 def fake_artifacts(monkeypatch):
     """Capture create_markdown_artifact calls instead of hitting Prefect."""
@@ -20,23 +59,35 @@ def fake_artifacts(monkeypatch):
 
 
 def _make_run_dir(logs_root, name, sources, mtime, *, with_detail=True):
-    """Create a run dir: one <source>_summary.log + a <source>/ detail dir."""
     run_dir = logs_root / name
     run_dir.mkdir(parents=True)
     for source in sources:
-        (run_dir / f"{source}_summary.log").write_text(f"{source} summary body")
+        (run_dir / f"{source}_summary.log").write_text(_SUMMARY.format(source=source))
         if with_detail:
             detail = run_dir / source
             detail.mkdir()
-            (detail / "C.log").write_text(f"{source} C iteration detail")
-            (detail / "OF.log").write_text(f"{source} OF iteration detail")
+            (detail / "C.log").write_text(_POSITION_LOG)
     os.utime(run_dir, (mtime, mtime))
     return run_dir
 
 
-def test_publishes_one_artifact_per_source(tmp_path, monkeypatch, fake_artifacts):
+def test_aligned_table_reassembles_multiword_names():
+    """The rostered table's multi-word name column survives the parse."""
+    header = " rank             name         tier  total_z  R_raw   R_z"
+    rows = [
+        "    1         Ben Rice     ROSTERED   17.325 36.000 2.466",
+        "    2  William Contreras REPLACEMENT    4.268 23.000 1.009",
+    ]
+    md = transform._aligned_table(header, rows)
+    assert "| Ben Rice |" in md
+    assert "| William Contreras |" in md
+    assert "| rank | name | tier | total_z | R_raw | R_z |" in md
+
+
+def test_publishes_one_artifact_per_source_as_markdown_tables(
+    tmp_path, monkeypatch, fake_artifacts
+):
     monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
-    # An older run and a newer run — only the newest is published.
     _make_run_dir(tmp_path, "20260101-000000", ["current"], mtime=1000)
     _make_run_dir(tmp_path, "20260520-215321", ["current", "ros"], mtime=2000)
 
@@ -48,40 +99,26 @@ def test_publishes_one_artifact_per_source(tmp_path, monkeypatch, fake_artifacts
         "mtbl-valuations-logs-ros",
     }
 
-    cur = by_key["mtbl-valuations-logs-current"]["markdown"]
-    # Summary + per-position detail are all present, each in a <pre> block.
-    assert "current summary body" in cur
-    assert "current C iteration detail" in cur
-    assert "current OF iteration detail" in cur
-    assert "<pre style=" in cur
-    assert "## C" in cur and "## OF" in cur
-    assert "20260520-215321" in by_key["mtbl-valuations-logs-current"]["description"]
-
-
-def test_log_content_is_html_escaped(tmp_path, monkeypatch, fake_artifacts):
-    """Raw `<`, `>`, `&` in logs must be escaped so they can't break markup."""
-    monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
-    run = tmp_path / "20260520-215321"
-    run.mkdir()
-    (run / "current_summary.log").write_text("top RLP $12 > rostered $11 & <b>bold</b>")
-    os.utime(run, (2000, 2000))
-
-    transform.publish_valuations_logs.fn()
-
-    md = fake_artifacts[0]["markdown"]
-    assert "&gt;" in md and "&amp;" in md and "&lt;b&gt;" in md
-    assert "<b>bold</b>" not in md  # the literal tag must not survive
+    md = by_key["mtbl-valuations-logs-current"]["markdown"]
+    # Summary tables rendered as markdown pipe tables.
+    assert "### Convergence" in md and "### Warnings" in md
+    assert "| source | phase | pos | iters_run | converged | oscillating | best_iter |" in md
+    # Per-position detail: heading + both tables, multi-word name intact.
+    assert "## C — iteration detail" in md
+    assert "#### phase3b-iter · C · iter 1" in md
+    assert "**RLP / scale**" in md and "**rostered + replacement**" in md
+    assert "| Ben Rice |" in md
+    # No code fences anywhere — that was the broken render path.
+    assert "```" not in md and "<pre" not in md
 
 
 def test_no_logs_dir_is_noop(tmp_path, monkeypatch, fake_artifacts):
-    """A missing logs directory is logged and swallowed — never raises."""
     monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path / "missing")
     transform.publish_valuations_logs.fn()
     assert fake_artifacts == []
 
 
 def test_empty_run_dir_is_noop(tmp_path, monkeypatch, fake_artifacts):
-    """A run directory with no *_summary.log files publishes nothing."""
     monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
     (tmp_path / "20260520-215321").mkdir()
     transform.publish_valuations_logs.fn()
@@ -89,9 +126,8 @@ def test_empty_run_dir_is_noop(tmp_path, monkeypatch, fake_artifacts):
 
 
 def test_summary_without_detail_dir_still_publishes(tmp_path, monkeypatch, fake_artifacts):
-    """A source with a summary but no per-position detail dir is fine."""
     monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
     _make_run_dir(tmp_path, "20260520-215321", ["current"], mtime=2000, with_detail=False)
     transform.publish_valuations_logs.fn()
     assert len(fake_artifacts) == 1
-    assert "current summary body" in fake_artifacts[0]["markdown"]
+    assert "### Convergence" in fake_artifacts[0]["markdown"]

@@ -1,14 +1,13 @@
 """Transform subflow: universe-trx then mtbl-valuations, sequential.
 
-After mtbl-valuations runs, its per-run iteration logs (the source summaries
-plus the full per-position iteration detail) are attached to the flow run as
-one markdown artifact per valuation source, so each run's complete trace is
-reviewable in the UI.
+After mtbl-valuations runs, its per-run iteration logs are rendered into one
+markdown artifact per valuation source. The logs' whitespace-aligned tables
+are converted to real markdown pipe tables and the section structure to
+headings — markdown tables and headings render correctly in the Prefect UI,
+unlike fenced code blocks.
 """
 
 from __future__ import annotations
-
-import html
 
 from prefect import flow, task
 from prefect.artifacts import create_markdown_artifact
@@ -24,14 +23,17 @@ from mtbl_prefect.tasks.shell import cli_task
 # fixed, known location inside the sub-project repo.
 VALUATIONS_LOGS_DIR = REPO_ROOT / "_transform/MTBL_Valuations/logs"
 
-# Inline-styled <pre>. A raw HTML <pre> element renders with browser-default
-# (or these) styles — it does NOT pick up Prefect UI v2's markdown code-block
-# CSS, which renders light-on-light. Markdown ``` fences hit that broken CSS;
-# a real <pre> element sidesteps it.
-_PRE_STYLE = (
-    "background:#1e1e2e;color:#e4e4e7;padding:12px;border-radius:6px;"
-    "overflow-x:auto;font-size:12px;line-height:1.45;"
+# Tier labels in the per-position "rostered + replacement" table. They anchor
+# the row parse: player names span multiple tokens, so a plain split breaks —
+# the single ALL-CAPS tier token marks where the name ends.
+_TIERS = {"ROSTERED", "REPLACEMENT", "BELOW_REPLACEMENT"}
+
+# Column layouts of the two tables in every *_summary.log. The warnings `msg`
+# column is free text, so it is the only one allowed to keep internal spaces.
+_CONVERGENCE_COLS = (
+    "source", "phase", "pos", "iters_run", "converged", "oscillating", "best_iter"
 )
+_WARNINGS_COLS = ("source", "phase", "pos", "iter", "kind", "msg")
 
 
 player_universe_trx = cli_task(
@@ -52,26 +54,149 @@ mtbl_valuations = cli_task(
 )
 
 
-def _pre_block(text: str) -> str:
-    """Wrap raw log text in an inline-styled HTML <pre>.
+# --------------------------------------------------------------------------
+# markdown table helpers
+# --------------------------------------------------------------------------
 
-    Content is HTML-escaped — the warning logs contain `>` and player names
-    that would otherwise break the markup. Using a real <pre> element rather
-    than a markdown ``` fence avoids Prefect UI v2's broken code-block theme.
+def _cell(value: str) -> str:
+    """Escape a value for a markdown table cell (a literal | breaks the row)."""
+    return value.replace("|", "\\|").strip()
+
+
+def _pipe_table(headers: list[str], rows: list[list[str]]) -> str:
+    """Render headers + rows as a markdown pipe table."""
+    head = "| " + " | ".join(_cell(h) for h in headers) + " |"
+    rule = "| " + " | ".join("---" for _ in headers) + " |"
+    body = "\n".join(
+        "| " + " | ".join(_cell(c) for c in row) + " |" for row in rows
+    )
+    return f"{head}\n{rule}\n{body}" if rows else f"{head}\n{rule}"
+
+
+def _aligned_table(header_line: str, data_lines: list[str]) -> str:
+    """Convert a whitespace-aligned text table to a markdown pipe table.
+
+    Most rows split cleanly on whitespace into the header's column count. The
+    "rostered + replacement" table is the exception — its `name` column holds
+    multi-word player names — so rows that over-split are reassembled around
+    the tier token. Rows that still don't fit the column count are dropped.
     """
-    return f'<pre style="{_PRE_STYLE}">{html.escape(text)}</pre>'
+    headers = header_line.split()
+    ncols = len(headers)
+    rows: list[list[str]] = []
+    for line in data_lines:
+        tokens = line.split()
+        if len(tokens) == ncols:
+            rows.append(tokens)
+            continue
+        # Reassemble a multi-word name around the tier token.
+        tier_idx = next(
+            (i for i, t in enumerate(tokens) if t in _TIERS), None
+        )
+        if tier_idx is not None and tier_idx >= 2:
+            row = [tokens[0], " ".join(tokens[1:tier_idx]), *tokens[tier_idx:]]
+            if len(row) == ncols:
+                rows.append(row)
+    return _pipe_table(headers, rows)
+
+
+# --------------------------------------------------------------------------
+# log parsers
+# --------------------------------------------------------------------------
+
+def _summary_section(lines: list[str], marker: str, cols: tuple[str, ...]) -> str:
+    """Render the table under `marker` (CONVERGENCE / WARNINGS) as markdown.
+
+    Layout is fixed: marker line, a dashed rule, a column header, then data
+    rows up to the first blank line. Returns "" if the marker is absent.
+    """
+    start = next(
+        (i for i, line in enumerate(lines)
+         if line.strip() == marker or line.strip().startswith(marker + " ")),
+        None,
+    )
+    if start is None:
+        return ""
+    ncols = len(cols)
+    rows: list[list[str]] = []
+    for line in lines[start + 3:]:  # skip marker, dashed rule, column header
+        if not line.strip():
+            break
+        fields = line.split(maxsplit=ncols - 1)
+        if len(fields) < ncols:
+            fields += [""] * (ncols - len(fields))
+        rows.append(fields)
+    return _pipe_table(list(cols), rows)
+
+
+def _render_summary(text: str) -> str:
+    """Render a *_summary.log into markdown — convergence + warnings tables."""
+    lines = text.splitlines()
+    out = []
+    convergence = _summary_section(lines, "CONVERGENCE", _CONVERGENCE_COLS)
+    warnings = _summary_section(lines, "WARNINGS", _WARNINGS_COLS)
+    if convergence:
+        out.append("### Convergence\n\n" + convergence)
+    if warnings:
+        out.append("### Warnings\n\n" + warnings)
+    return "\n\n".join(out)
+
+
+def _render_position_log(text: str) -> str:
+    """Render one per-position detail log into markdown.
+
+    Each iteration block becomes an `####` heading with a meta line and the
+    RLP/scale + rostered tables as markdown pipe tables. Blocks without those
+    tables (e.g. budget phases) render heading + meta only.
+    """
+    lines = text.splitlines()
+    out: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        if line.startswith("PHASE:"):
+            kv = {}
+            for part in line.split("|"):
+                if ":" in part:
+                    k, v = part.split(":", 1)
+                    kv[k.strip()] = v.strip()
+            out.append(
+                f"#### {kv.get('PHASE', '?')} · {kv.get('POS', '?')} "
+                f"· iter {kv.get('ITER', '?')}"
+            )
+        elif line.startswith(("pool_size:", "composition_hash:")):
+            out.append(f"`{line.strip()}`")
+        elif line.startswith("below_replacement:"):
+            out.append(f"_{line.strip()}_")
+        elif line.startswith(("RLP / scale", "rostered + replacement")):
+            label = line.strip().rstrip(":").split("(")[0].strip()
+            # Header is the next non-blank line; rows run until the next blank.
+            j = i + 1
+            while j < n and not lines[j].strip():
+                j += 1
+            if j < n:
+                header_line = lines[j]
+                data: list[str] = []
+                j += 1
+                while j < n and lines[j].strip():
+                    data.append(lines[j])
+                    j += 1
+                out.append(f"**{label}**\n\n{_aligned_table(header_line, data)}")
+                i = j
+                continue
+        i += 1
+    return "\n\n".join(out)
 
 
 @task(name="publish-valuations-iteration-logs", log_prints=True)
 def publish_valuations_logs() -> None:
     """Publish the latest mtbl-valuations run's logs as per-source artifacts.
 
-    For each valuation source, one markdown artifact carries the source
-    summary plus every per-position iteration detail log, each embedded in a
-    raw <pre> block. One artifact per source keeps each well under any size
-    limit and groups them in the UI.
+    One markdown artifact per valuation source: the source summary
+    (convergence + warnings tables) followed by every per-position iteration
+    log, all rendered as markdown headings + pipe tables.
 
-    Best-effort: a missing directory or read error is logged and swallowed —
+    Best-effort: a missing directory or parse error is logged and swallowed —
     a logging hiccup must never fail the transform.
     """
     try:
@@ -89,23 +214,21 @@ def publish_valuations_logs() -> None:
         published = 0
         for summary in summaries:
             source = summary.stem.removesuffix("_summary")
-            sections = [
-                f"# mtbl-valuations logs — {source}\n",
-                f"_Run: `{latest.name}`_\n",
-                "## Summary\n",
-                _pre_block(summary.read_text()),
+            parts = [
+                f"# mtbl-valuations — {source}",
+                f"_Run: `{latest.name}`_",
+                "## Summary",
+                _render_summary(summary.read_text()),
             ]
-            # Per-position iteration detail lives in a sibling directory named
-            # for the source (e.g. logs/<run>/current/C.log).
             detail_dir = latest / source
             if detail_dir.is_dir():
                 for pos_log in sorted(detail_dir.glob("*.log")):
-                    sections.append(f"\n## {pos_log.stem}\n")
-                    sections.append(_pre_block(pos_log.read_text()))
+                    parts.append(f"## {pos_log.stem} — iteration detail")
+                    parts.append(_render_position_log(pos_log.read_text()))
 
             create_markdown_artifact(
                 key=f"mtbl-valuations-logs-{source}",
-                markdown="\n".join(sections),
+                markdown="\n\n".join(parts),
                 description=f"{source} iteration logs — run {latest.name}",
             )
             published += 1
