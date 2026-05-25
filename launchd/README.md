@@ -33,7 +33,7 @@ Then run the one-time `pmset` command (needs sudo):
 sudo pmset repeat wakeorpoweron MTWRFSU 00:14:00
 ```
 
-`MTWRFSU` = Mon, Tue, Wed, Thu, Fri, Sat, Sun (macOS's weekday letter codes). `wakeorpoweron` wakes from sleep AND turns on from soft-off. The 2-minute lead time gives Docker Desktop a moment to settle after wake before the LaunchAgent fires the run at 00:16.
+`MTWRFSU` = Mon, Tue, Wed, Thu, Fri, Sat, Sun (macOS's weekday letter codes). `wakeorpoweron` wakes from sleep AND turns on from soft-off. The 2-minute lead time gives the kernel + filesystem a moment to settle before the LaunchAgent fires at 00:16; Docker Desktop itself is started by the plist's bash preflight (`open -ga Docker` + poll `docker info` for up to 120s) — `pmset` does not relaunch userspace daemons on wake.
 
 This `pmset` wake covers the **00:16** run only — `pmset repeat` supports a single repeating wake event. The **09:05** run is not wake-scheduled: if the Mac is awake it fires on time; if asleep, launchd runs it on the next wake (open the lid → the run fires → fresh data lands ~5–15 min later, still in time to set lineups). No second `pmset` entry is needed for the morning run.
 
@@ -170,6 +170,10 @@ Removes the plist from `~/Library/LaunchAgents/` and boots it out of launchd. Do
 **Agent fires but `docker compose` not found** — the LaunchAgent's `PATH` doesn't include the Docker Desktop binary location. Default in the plist is `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` which covers both Apple Silicon and Intel Homebrew. If your Docker install lives elsewhere, edit the `<key>PATH</key>` value in the plist + re-install.
 
 **00:16 run does not fire** — first check `pmset -g log | tail -50` to see whether the Mac actually woke at 00:14 or went deeper into sleep. If wake didn't happen, `pmset` wasn't set or got reset by a macOS update. Re-run the `sudo pmset repeat wakeorpoweron MTWRFSU 00:14:00` command.
+
+**00:16 run fires but exits with status 2** — that's the Docker preflight giving up. The plist runs `open -ga Docker` and then polls `docker info` every 2s for 120s before falling through to the pipeline; exit 2 means Docker Desktop never came up in time. Common causes: (1) Docker Desktop is mid-update and the daemon is stuck; (2) "Use Rosetta for x86_64/amd64 emulation" got toggled and Docker is in a recovery loop; (3) the disk is full and Docker can't start its VM. Open Docker Desktop manually, watch it settle, then re-fire with `launchctl kickstart -k gui/$(id -u)/com.mtbl.prefect.nightly`. If exit 2 recurs, raise the poll budget (`seq 1 60` → `seq 1 120`) for a 240s ceiling.
+
+**00:16 run fires but exits with status 1 and the err log ends in `dial unix … docker.sock: no such file or directory`** — the preflight succeeded but Docker died between the poll and the `docker compose run`. Race is rare on a stable host; if you see it repeatedly, the Mac is probably re-sleeping mid-run (System Settings → Battery / Energy → "Wake for network access" or "Prevent automatic sleeping when display is off").
 
 **09:05 run does not fire** — this run has no `pmset` wake. If the Mac was asleep at 09:05, launchd runs the job on the next wake — check the log timestamp against when you opened the Mac. If it fired late but did fire, that's expected behavior, not a fault. If it never fired at all, confirm the agent is loaded (`launchctl print` — see Verify) and that `launchctl print` shows two `StartCalendarInterval` descriptors.
 
