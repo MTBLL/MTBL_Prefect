@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -77,34 +76,57 @@ def _retry_only_transient(task, task_run, state) -> bool:
 def run_uv_cli(project_dir: str, *args: str) -> None:
     """Run `uv run --directory <REPO_ROOT/project_dir> <args>` as a subprocess.
 
-    Stderr is captured (then echoed) so we can classify the failure mode.
-    Stdout streams through to the parent so progress is visible in real time.
+    The child's stdout and stderr are merged and streamed line by line through
+    `print()`. This is deliberate: a child process writing to its own stdout
+    file descriptor bypasses Prefect's `log_prints` capture (which patches
+    `sys.stdout` at the Python level), so its output never reaches the task's
+    logs in the UI. Re-emitting each line via `print()` puts it back inside
+    that capture — every line of pipe output now lands in Prefect's logs.
 
-    Exit code 0 is success; anything else fails the task. (Earlier versions
-    of this helper accepted `allow_exit_code_1=True` to paper over the
-    universe-trx CLI's exit-code-1-on-success quirk — that quirk was fixed
-    upstream in MTBL-153 and the whitelist is gone.)
+    Exit code 0 is success; anything else fails the task. Each line is scanned
+    for transient-failure markers (see TRANSIENT_PATTERNS) as it streams — the
+    result is OR-folded into a flag, so the full output is never retained in
+    memory (a verbose CLI could otherwise grow an unbounded buffer).
+
+    (Earlier versions accepted `allow_exit_code_1=True` to paper over the
+    universe-trx CLI's exit-code-1-on-success quirk — fixed upstream in
+    MTBL-153, whitelist gone.)
     """
     full_cmd = _build_cmd(project_dir, args)
     env = _build_env(project_dir)
     print(f"$ {' '.join(full_cmd)}")
-    result = subprocess.run(
-        full_cmd, env=env, check=False, stderr=subprocess.PIPE, text=True
-    )
-    if result.stderr:
-        print(result.stderr, end="", file=sys.stderr)
 
-    if result.returncode == 0:
+    proc = subprocess.Popen(
+        full_cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    # Drain the merged stream live so progress shows in the logs in real time.
+    # The transient-failure check is incremental — each line is tested as it
+    # streams and folded into a flag — so no output is buffered (a verbose CLI
+    # would otherwise grow an unbounded list just to be scanned once at exit).
+    transient = False
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        print(line, end="")
+        if not transient and _looks_transient(line):
+            transient = True
+    returncode = proc.wait()
+
+    if returncode == 0:
         return
 
     cmd_str = " ".join(full_cmd)
-    if _looks_transient(result.stderr or ""):
+    if transient:
         raise RuntimeError(
             f"{_RETRYABLE_MARKER} command failed with exit code "
-            f"{result.returncode}: {cmd_str}"
+            f"{returncode}: {cmd_str}"
         )
     raise RuntimeError(
-        f"command failed with exit code {result.returncode}: {cmd_str}"
+        f"command failed with exit code {returncode}: {cmd_str}"
     )
 
 
