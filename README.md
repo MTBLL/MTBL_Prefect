@@ -37,6 +37,29 @@ Everything is triggered from your host shell. The runner container is ephemeral 
 
 The Phase 3 LaunchAgent is just the "production-faithful" row, fired by `launchd` at 00:16 America/Denver instead of by your shell — see [`launchd/README.md`](launchd/README.md) for install / verify / uninstall.
 
+## Host-direct setup
+
+The "dev, fast iteration" row above runs the orchestrator on your host shell, bypassing Docker. The flow still needs to reach the `fantasy-pg` Postgres container — but that container's hostname (`fantasy-pg`) is a docker-compose service name and resolves only from inside the compose network, not from host. You'd see:
+
+```
+❌ Connection failed: could not translate host name "fantasy-pg" to address: nodename nor servname provided, or not known
+```
+
+Fix: `fantasy-pg` publishes its Postgres on host port **5433** (chosen over 5432 to avoid colliding with a host-native Postgres). Override `LOCAL_DATABASE_URL` for your host shell by creating `.envrc.local` (gitignored) with:
+
+```bash
+export LOCAL_DATABASE_URL=postgresql://fantasy:fantasy@localhost:5433/fantasy_baseball
+```
+
+`.envrc` loads `.env` first (in-container default), then sources `.envrc.local` if present — so host-direct runs see the localhost URL while the runner container keeps using `fantasy-pg`. After creating the file:
+
+```
+direnv allow              # tell direnv the new .envrc.local is trusted
+psql "$LOCAL_DATABASE_URL" -c '\dt'   # confirm the host reaches fantasy-pg on 5433
+```
+
+You'll need this once per machine. The override is a no-op for the docker-runner path — that container reads `.env` directly via `env_file:`, not via direnv.
+
 ## Flag mapping
 
 The orchestrator exposes a minimal CLI surface. Flags are translated and routed to each sub-project's own CLI by the flow code in `mtbl_prefect/flows/`. This section documents exactly which flags reach which sub-project, and where each value comes from.
