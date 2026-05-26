@@ -35,6 +35,15 @@ TRANSIENT_PATTERNS: tuple[str, ...] = (
     "Rate limit",
     "TimeoutError",
     "TemporaryFailure",
+    # psql / libpq disconnect signatures — Neon endpoints occasionally drop
+    # the SSL stream mid-upload during the Postgres restore step, surfacing
+    # in stderr as one of these. All are well-known transient modes
+    # (TCP keepalive lapse, idle connection reaped, endpoint cold-start);
+    # the next attempt with backoff almost always succeeds.
+    "SSL error: unexpected eof",
+    "SSL SYSCALL error: EOF detected",
+    "server closed the connection unexpectedly",
+    "could not connect to server",
 )
 
 # Marker injected into RuntimeError messages so retry_condition_fn can

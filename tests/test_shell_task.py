@@ -133,6 +133,11 @@ def test_host_mode_does_not_add_frozen_or_uv_project_environment(monkeypatch):
     "TimeoutError: Read timed out",
     "Got 429 Too Many Requests, retrying",
     "RemoteDisconnected: Remote end closed connection without response",
+    # psql / libpq disconnect signatures — exercised by the Neon sync step.
+    '❌ psql upload failed: psql: error: connection to server at "ep-dawn-leaf-aew9d2fm.c-2.us-east-2.aws.neon.tech" (3.137.42.68), port 5432 failed: SSL error: unexpected eof while reading',
+    "psql: error: SSL SYSCALL error: EOF detected",
+    "psql: error: server closed the connection unexpectedly\n\tThis probably means the server terminated abnormally",
+    "psql: error: could not connect to server: Connection timed out",
 ])
 def test_transient_output_produces_retryable_marker(monkeypatch, output_excerpt):
     monkeypatch.setattr(shell.subprocess, "Popen", _fake_popen(2, output=output_excerpt))
