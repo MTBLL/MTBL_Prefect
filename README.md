@@ -45,13 +45,15 @@ The "dev, fast iteration" row above runs the orchestrator on your host shell, by
 ❌ Connection failed: could not translate host name "fantasy-pg" to address: nodename nor servname provided, or not known
 ```
 
-Fix: `fantasy-pg` publishes its Postgres on host port **5433** (chosen over 5432 to avoid colliding with a host-native Postgres). Override `LOCAL_DATABASE_URL` for your host shell by creating `.envrc.local` (gitignored) with:
+Fix: `fantasy-pg` publishes its Postgres on host port **5433** (chosen over 5432 to avoid colliding with a host-native Postgres), bound to **127.0.0.1 only** — never reachable from LAN/VPN, since the dev creds are weak and traffic is plaintext. Override `LOCAL_DATABASE_URL` for your host shell by creating `.envrc.local` (gitignored) with:
 
 ```bash
-export LOCAL_DATABASE_URL=postgresql://fantasy:fantasy@localhost:5433/fantasy_baseball
+export LOCAL_DATABASE_URL=postgresql://fantasy:fantasy@127.0.0.1:5433/fantasy_baseball
 ```
 
-`.envrc` loads `.env` first (in-container default), then sources `.envrc.local` if present — so host-direct runs see the localhost URL while the runner container keeps using `fantasy-pg`. After creating the file:
+Use `127.0.0.1`, not `localhost`. The published port is bound to the IPv4 loopback only; on macOS, `localhost` resolves to `::1` (IPv6) first, so a `localhost` URL incurs one refused-connection retry per connect before falling back to v4. Explicit `127.0.0.1` avoids the round-trip.
+
+`.envrc` loads `.env` first (in-container default), then sources `.envrc.local` if present — so host-direct runs see the loopback URL while the runner container keeps using `fantasy-pg`. After creating the file:
 
 ```
 direnv allow              # tell direnv the new .envrc.local is trusted

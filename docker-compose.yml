@@ -28,9 +28,14 @@ services:
     # flows can reach this container's Postgres without the runner network.
     # Inside the compose network the runner still reaches it as `fantasy-pg:5432`.
     # 5433 (not 5432) avoids colliding with a developer's host-native Postgres
-    # which conventionally listens on 5432. See README §Host-direct setup.
+    # which conventionally listens on 5432.
+    #
+    # Bound to 127.0.0.1 — NOT 0.0.0.0 — so the published port is reachable
+    # only from this machine, never from LAN/VPN. The dev creds are weak
+    # (`fantasy:fantasy`) and the database is unencrypted on the wire; the
+    # loopback bind is the load-bearing protection. See README §Host-direct setup.
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fantasy -d fantasy_baseball"]
       interval: 10s
