@@ -35,7 +35,7 @@ Everything is triggered from your host shell. The runner container is ephemeral 
 | Tail server logs | `docker compose logs -f prefect-server` | Host triggers |
 | Open a debug shell in the runner image | `docker compose --profile runner run --rm --entrypoint bash runner` | Escape hatch, not a normal workflow |
 
-The Phase 3 LaunchAgent is just the "production-faithful" row, fired by `launchd` at 00:16 America/Denver instead of by your shell — see [`launchd/README.md`](launchd/README.md) for install / verify / uninstall.
+The Phase 3 LaunchAgent is just the "production-faithful" row, fired by `launchd` at 05:45 + 09:05 America/Denver instead of by your shell — see [`launchd/README.md`](launchd/README.md) for install / verify / uninstall.
 
 ## Host-direct setup
 
