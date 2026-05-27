@@ -23,17 +23,21 @@
          the system clock (TZ America/Denver), so both track the MDT/MST
          shift automatically and hold their local time year-round.
 
-         00:16 — captures the prior day's completed games. Surfaces who to
-                 target on waivers before claims process.
+         05:45 — captures the prior day's completed games. Late enough that
+                 upstream stat sources (Fangraphs / Savant) have settled
+                 overnight, so the first morning login sees fresh data
+                 rather than stale numbers from a mid-update fetch.
+                 Still ahead of the 09:00 waiver claim window, so the
+                 day's waiver-target list is ready well before claims fire.
          09:05 — captures that day's waiver activity (claims clear at 09:00).
                  Post-waiver roster state is loaded in time to set lineups. -->
     <key>StartCalendarInterval</key>
     <array>
         <dict>
             <key>Hour</key>
-            <integer>0</integer>
+            <integer>5</integer>
             <key>Minute</key>
-            <integer>16</integer>
+            <integer>45</integer>
         </dict>
         <dict>
             <key>Hour</key>
