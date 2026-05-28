@@ -25,13 +25,13 @@ launchctl bootout "${UID_DOMAIN}/${PLIST_NAME}" 2>/dev/null || true
 launchctl bootstrap "${UID_DOMAIN}" "${PLIST_DST}"
 
 echo
-echo "✓ LaunchAgent installed. Next fire: 00:16 America/Denver tomorrow."
+echo "✓ LaunchAgent installed. Next fire: 05:45 America/Denver tomorrow (or 09:05 today if before 09:05)."
 echo
 echo "  Verify with:"
 echo "      launchctl print ${UID_DOMAIN}/${PLIST_NAME} | head -30"
 echo
-echo "  Required follow-up — wake the Mac at 00:14 (one-time, needs sudo):"
-echo "      sudo pmset repeat wakeorpoweron MTWRFSU 00:14:00"
+echo "  Required follow-up — wake the Mac at 05:43 (one-time, needs sudo):"
+echo "      sudo pmset repeat wakeorpoweron MTWRFSU 05:43:00"
 echo
 echo "  Confirm wake schedule:"
 echo "      pmset -g sched"

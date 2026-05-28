@@ -169,3 +169,45 @@ def test_summary_without_detail_dir_still_publishes(tmp_path, monkeypatch, fake_
     assert len(fake_artifacts) == 1
     assert fake_artifacts[0]["key"] == "mtbl-valuations-logs-current-summary"
     assert "### Convergence" in fake_artifacts[0]["markdown"]
+
+
+def test_multi_candidate_disambiguates_keys(tmp_path, monkeypatch, fake_artifacts):
+    """Two run dirs in the window → publish both with run-name-suffixed keys.
+
+    Filesystem state alone cannot tell which dir belongs to this run when
+    an overlapping mtbl-valuations run also created a dir in the same
+    before/after window. Picking newest-by-mtime would silently overwrite
+    this run's artifacts with the other run's content. Instead publish
+    every candidate under disambiguated keys (``-<rundirname>``).
+    """
+    monkeypatch.setattr(transform, "VALUATIONS_LOGS_DIR", tmp_path)
+    # Two run dirs, both within this run's snapshot window. Newer mtime on
+    # the second one is what the old max-by-mtime code would have picked.
+    _make_run_dir(tmp_path, "20260520-100000", ["current"], mtime=1000)
+    _make_run_dir(tmp_path, "20260520-200000", ["current"], mtime=2000)
+
+    transform.publish_valuations_logs.fn(
+        run_dir_names=["20260520-100000", "20260520-200000"]
+    )
+
+    by_key = {c["key"]: c for c in fake_artifacts}
+    # Both dirs publish full artifact sets with disambiguated keys — no
+    # collision between the two runs' artifacts.
+    assert set(by_key) == {
+        "mtbl-valuations-logs-current-summary-20260520-100000",
+        "mtbl-valuations-logs-current-c-20260520-100000",
+        "mtbl-valuations-logs-current-summary-20260520-200000",
+        "mtbl-valuations-logs-current-c-20260520-200000",
+    }
+    # Stable (un-suffixed) keys are NOT used when there is ambiguity — they
+    # would silently pin one run's content under the expected name.
+    assert "mtbl-valuations-logs-current-summary" not in by_key
+    assert "mtbl-valuations-logs-current-c" not in by_key
+
+    # Each artifact's body refers to its own run dir, not the other one.
+    art100 = by_key["mtbl-valuations-logs-current-summary-20260520-100000"]
+    art200 = by_key["mtbl-valuations-logs-current-summary-20260520-200000"]
+    assert "20260520-100000" in art100["markdown"]
+    assert "20260520-200000" not in art100["markdown"]
+    assert "20260520-200000" in art200["markdown"]
+    assert "20260520-100000" not in art200["markdown"]

@@ -35,7 +35,32 @@ Everything is triggered from your host shell. The runner container is ephemeral 
 | Tail server logs | `docker compose logs -f prefect-server` | Host triggers |
 | Open a debug shell in the runner image | `docker compose --profile runner run --rm --entrypoint bash runner` | Escape hatch, not a normal workflow |
 
-The Phase 3 LaunchAgent is just the "production-faithful" row, fired by `launchd` at 00:16 America/Denver instead of by your shell — see [`launchd/README.md`](launchd/README.md) for install / verify / uninstall.
+The Phase 3 LaunchAgent is just the "production-faithful" row, fired by `launchd` at 05:45 + 09:05 America/Denver instead of by your shell — see [`launchd/README.md`](launchd/README.md) for install / verify / uninstall.
+
+## Host-direct setup
+
+The "dev, fast iteration" row above runs the orchestrator on your host shell, bypassing Docker. The flow still needs to reach the `fantasy-pg` Postgres container — but that container's hostname (`fantasy-pg`) is a docker-compose service name and resolves only from inside the compose network, not from host. You'd see:
+
+```
+❌ Connection failed: could not translate host name "fantasy-pg" to address: nodename nor servname provided, or not known
+```
+
+Fix: `fantasy-pg` publishes its Postgres on host port **5433** (chosen over 5432 to avoid colliding with a host-native Postgres), bound to **127.0.0.1 only** — never reachable from LAN/VPN, since the dev creds are weak and traffic is plaintext. Override `LOCAL_DATABASE_URL` for your host shell by creating `.envrc.local` (gitignored) with:
+
+```bash
+export LOCAL_DATABASE_URL=postgresql://fantasy:fantasy@127.0.0.1:5433/fantasy_baseball
+```
+
+Use `127.0.0.1`, not `localhost`. The published port is bound to the IPv4 loopback only; on macOS, `localhost` resolves to `::1` (IPv6) first, so a `localhost` URL incurs one refused-connection retry per connect before falling back to v4. Explicit `127.0.0.1` avoids the round-trip.
+
+`.envrc` loads `.env` first (in-container default), then sources `.envrc.local` if present — so host-direct runs see the loopback URL while the runner container keeps using `fantasy-pg`. After creating the file:
+
+```
+direnv allow              # tell direnv the new .envrc.local is trusted
+psql "$LOCAL_DATABASE_URL" -c '\dt'   # confirm the host reaches fantasy-pg on 5433
+```
+
+You'll need this once per machine. The override is a no-op for the docker-runner path — that container reads `.env` directly via `env_file:`, not via direnv.
 
 ## Flag mapping
 

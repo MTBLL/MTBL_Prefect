@@ -5,28 +5,39 @@
     <key>Label</key>
     <string>com.mtbl.prefect.nightly</string>
 
+    <!-- Docker preflight: Docker Desktop on macOS does NOT relaunch after a
+         sleep/wake cycle, even with "Start at login" enabled. Without this
+         block the launchd fire after a wake-from-sleep races a dead socket
+         and exits 1 instantly. `open -ga Docker` is a no-op if it is already
+         running, otherwise launches it; the poll then blocks (max 120s) until
+         the daemon answers `docker info`. Exit code 2 distinguishes a
+         preflight timeout from a pipeline failure (exit 1). -->
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
         <string>-lc</string>
-        <string>cd /Users/Shared/BaseballHQ/tools/_orchestrate/MTBL_Prefect &amp;&amp; docker compose --profile runner run --rm runner full-pipeline --year $(date +%Y)</string>
+        <string>open -ga Docker; for i in $(seq 1 60); do docker info &gt;/dev/null 2&gt;&amp;1 &amp;&amp; break; sleep 2; done; docker info &gt;/dev/null 2&gt;&amp;1 || { echo &quot;[preflight] Docker daemon not ready after 120s&quot; &gt;&amp;2; exit 2; }; cd /Users/Shared/BaseballHQ/tools/_orchestrate/MTBL_Prefect &amp;&amp; docker compose --profile runner run --rm runner full-pipeline --year $(date +%Y)</string>
     </array>
 
     <!-- Two runs per day, both America/Denver wall-clock. launchd fires on
          the system clock (TZ America/Denver), so both track the MDT/MST
          shift automatically and hold their local time year-round.
 
-         00:16 — captures the prior day's completed games. Surfaces who to
-                 target on waivers before claims process.
+         05:45 — captures the prior day's completed games. Late enough that
+                 upstream stat sources (Fangraphs / Savant) have settled
+                 overnight, so the first morning login sees fresh data
+                 rather than stale numbers from a mid-update fetch.
+                 Still ahead of the 09:00 waiver claim window, so the
+                 day's waiver-target list is ready well before claims fire.
          09:05 — captures that day's waiver activity (claims clear at 09:00).
                  Post-waiver roster state is loaded in time to set lineups. -->
     <key>StartCalendarInterval</key>
     <array>
         <dict>
             <key>Hour</key>
-            <integer>0</integer>
+            <integer>5</integer>
             <key>Minute</key>
-            <integer>16</integer>
+            <integer>45</integer>
         </dict>
         <dict>
             <key>Hour</key>

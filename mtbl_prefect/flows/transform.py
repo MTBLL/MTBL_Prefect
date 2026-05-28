@@ -9,6 +9,8 @@ headings render correctly in the Prefect UI, unlike fenced code blocks.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from prefect import flow, task
 from prefect.artifacts import create_markdown_artifact
 
@@ -201,13 +203,63 @@ def _run_dir_names() -> set[str]:
         return set()
 
 
+def _publish_for_run_dir(run_dir: Path, key_suffix: str) -> int:
+    """Publish summary + per-position artifacts for one run directory.
+
+    `key_suffix` is appended to every artifact key. Empty in the normal
+    single-candidate case (stable keys keep a source's shards clustered in
+    the UI). Set to ``-<rundirname>`` when multiple candidates force
+    disambiguation — see publish_valuations_logs.
+    """
+    summaries = sorted(run_dir.glob("*_summary.log"))
+    if not summaries:
+        print(f"No *_summary.log files in {run_dir}")
+        return 0
+
+    published = 0
+    for summary in summaries:
+        source = summary.stem.removesuffix("_summary")
+
+        # One artifact for the source summary (convergence + warnings).
+        create_markdown_artifact(
+            key=f"mtbl-valuations-logs-{source}-summary{key_suffix}",
+            markdown="\n\n".join([
+                f"# mtbl-valuations — {source} / summary",
+                f"_Run: `{run_dir.name}`_",
+                _render_summary(summary.read_text()),
+            ]),
+            description=f"{source} convergence + warnings — run {run_dir.name}",
+        )
+        published += 1
+
+        # One artifact per position — sharded so each renders fast.
+        detail_dir = run_dir / source
+        if detail_dir.is_dir():
+            for pos_log in sorted(detail_dir.glob("*.log")):
+                position = pos_log.stem
+                create_markdown_artifact(
+                    key=f"mtbl-valuations-logs-{source}-{position.lower()}{key_suffix}",
+                    markdown="\n\n".join([
+                        f"# mtbl-valuations — {source} / {position}",
+                        f"_Run: `{run_dir.name}`_",
+                        _render_position_log(pos_log.read_text()),
+                    ]),
+                    description=(
+                        f"{source} / {position} iteration detail "
+                        f"— run {run_dir.name}"
+                    ),
+                )
+                published += 1
+    return published
+
+
 @task(name="publish-valuations-iteration-logs", log_prints=True)
 def publish_valuations_logs(run_dir_names: list[str] | None = None) -> None:
     """Publish this run's mtbl-valuations logs, sharded per position.
 
     `run_dir_names` is the run-directory name(s) that appeared while
     mtbl-valuations ran — the flow resolves this by diffing before/after
-    snapshots of the logs root around the mtbl-valuations call. Selecting from
+    snapshots of the logs root around the mtbl-valuations call. Scoping to
     that set (rather than a global newest-by-mtime) keeps an overlapping run
     from misdirecting the artifacts.
 
@@ -219,15 +271,30 @@ def publish_valuations_logs(run_dir_names: list[str] | None = None) -> None:
     one artifact per fielding position. Sharding keeps each artifact small so
     it renders fast — a single combined per-source document was too large.
 
+    Multi-candidate handling: in the normal case the before/after window
+    yields one new directory and stable keys are used. If an overlapping
+    run created a second directory in the same window we cannot tell which
+    is ours from filesystem state — picking newest-by-mtime could publish
+    the other run's content under our keys and silently overwrite the
+    expected artifacts. Instead, publish every candidate with the run-dir
+    name appended to each key (``-<rundirname>``). Worst case: two complete
+    artifact sets, each clearly tagged, no data lost or mis-attributed.
+
     Best-effort: a missing directory or parse error is logged and swallowed —
     a logging hiccup must never fail the transform.
     """
     try:
-        candidates = [
-            VALUATIONS_LOGS_DIR / name
-            for name in (run_dir_names or [])
-            if (VALUATIONS_LOGS_DIR / name).is_dir()
-        ]
+        # Sort by dir name (YYYYMMDD-HHMMSS, lex order == chrono order) for
+        # a deterministic publish order — not for tie-breaking, since we
+        # publish every candidate, not just one.
+        candidates = sorted(
+            (
+                VALUATIONS_LOGS_DIR / name
+                for name in (run_dir_names or [])
+                if (VALUATIONS_LOGS_DIR / name).is_dir()
+            ),
+            key=lambda d: d.name,
+        )
         if not candidates:
             print(
                 "No mtbl-valuations log directory for this run under "
@@ -235,53 +302,23 @@ def publish_valuations_logs(run_dir_names: list[str] | None = None) -> None:
             )
             return
 
-        # Normally exactly one directory appeared during this run; if an
-        # overlapping run also created one in the same window, the newest is
-        # the safest pick.
-        latest = max(candidates, key=lambda d: d.stat().st_mtime)
-        summaries = sorted(latest.glob("*_summary.log"))
-        if not summaries:
-            print(f"No *_summary.log files in {latest}")
-            return
+        disambiguate = len(candidates) > 1
+        if disambiguate:
+            print(
+                f"WARNING: {len(candidates)} mtbl-valuations log dirs "
+                f"appeared in this run's window — cannot attribute to "
+                f"this run from filesystem state. Publishing all with "
+                f"run-name-suffixed keys: {[d.name for d in candidates]}"
+            )
 
         published = 0
-        for summary in summaries:
-            source = summary.stem.removesuffix("_summary")
-
-            # One artifact for the source summary (convergence + warnings).
-            create_markdown_artifact(
-                key=f"mtbl-valuations-logs-{source}-summary",
-                markdown="\n\n".join([
-                    f"# mtbl-valuations — {source} / summary",
-                    f"_Run: `{latest.name}`_",
-                    _render_summary(summary.read_text()),
-                ]),
-                description=f"{source} convergence + warnings — run {latest.name}",
-            )
-            published += 1
-
-            # One artifact per position — sharded so each renders fast.
-            detail_dir = latest / source
-            if detail_dir.is_dir():
-                for pos_log in sorted(detail_dir.glob("*.log")):
-                    position = pos_log.stem
-                    create_markdown_artifact(
-                        key=f"mtbl-valuations-logs-{source}-{position.lower()}",
-                        markdown="\n\n".join([
-                            f"# mtbl-valuations — {source} / {position}",
-                            f"_Run: `{latest.name}`_",
-                            _render_position_log(pos_log.read_text()),
-                        ]),
-                        description=(
-                            f"{source} / {position} iteration detail "
-                            f"— run {latest.name}"
-                        ),
-                    )
-                    published += 1
+        for run_dir in candidates:
+            suffix = f"-{run_dir.name}" if disambiguate else ""
+            published += _publish_for_run_dir(run_dir, suffix)
 
         print(
             f"Published {published} sharded iteration-log artifact(s) "
-            f"from {latest.name}"
+            f"from {[d.name for d in candidates]}"
         )
     except Exception as exc:  # noqa: BLE001 — logging is strictly best-effort
         print(f"WARNING: could not publish valuations iteration logs: {exc}")
