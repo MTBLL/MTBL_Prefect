@@ -64,6 +64,20 @@ services:
       - "4200:4200"
     restart: unless-stopped
 
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: mtbl-flaresolverr
+    environment:
+      LOG_LEVEL: info
+    # Published on loopback so host-direct `uv run` flows reach the solver at
+    # http://localhost:8191 too. Inside the compose network the runner reaches
+    # it as http://flaresolverr:8191. Bound to 127.0.0.1 — NOT 0.0.0.0 — because
+    # the solver proxies arbitrary URLs through a real browser; it must never be
+    # exposed to LAN/VPN.
+    ports:
+      - "127.0.0.1:8191:8191"
+    restart: unless-stopped
+
   runner:
     profiles: ["runner"]
     build:
@@ -75,9 +89,14 @@ services:
         condition: service_started
       fantasy-pg:
         condition: service_healthy
+      flaresolverr:
+        condition: service_started
     environment:
       PREFECT_API_URL: http://prefect-server:4200/api
       MTBL_VENV_ROOT: /opt/uv-envs
+      # Fangraphs fronts its projections API with a Cloudflare managed JS
+      # challenge; the Fangraphs extractor delegates solving to this sidecar.
+      FLARESOLVERR_URL: http://flaresolverr:8191/v1
       # uv's package cache (overlayfs) and the per-project venv target (named
       # volume) are on different filesystems, so hardlinks can't be used.
       # Tell uv to copy instead — suppresses the noisy warning on every install.

@@ -62,6 +62,25 @@ psql "$LOCAL_DATABASE_URL" -c '\dt'   # confirm the host reaches fantasy-pg on 5
 
 You'll need this once per machine. The override is a no-op for the docker-runner path — that container reads `.env` directly via `env_file:`, not via direnv.
 
+### FlareSolverr (Fangraphs Cloudflare challenge)
+
+Fangraphs fronts its projections API with a Cloudflare managed JS challenge, so
+the Fangraphs extractor needs a FlareSolverr sidecar to mint a `cf_clearance`
+cookie (see the extractor's `docs/the-wall-goes-up.md`). The docker-runner path
+gets this automatically — `docker compose up` starts the `flaresolverr` service
+and the runner is pointed at it via `FLARESOLVERR_URL`.
+
+For **host-direct** runs, start the solver and export its URL:
+
+```
+docker compose up -d flaresolverr          # publishes on 127.0.0.1:8191
+export FLARESOLVERR_URL=http://localhost:8191/v1   # or add to .envrc.local
+```
+
+The cookie is bound to the solver's User-Agent **and egress IP** — running the
+solver on the same host as the flow keeps both consistent. Leave
+`FLARESOLVERR_URL` unset only when the challenge isn't active (pulls 403 if it is).
+
 ## Flag mapping
 
 The orchestrator exposes a minimal CLI surface. Flags are translated and routed to each sub-project's own CLI by the flow code in `mtbl_prefect/flows/`. This section documents exactly which flags reach which sub-project, and where each value comes from.
