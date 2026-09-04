@@ -23,7 +23,7 @@ Execution tracking: `mtbl-player-etl` project in Linear (trp workspace)
 
 ## Invocation matrix
 
-Everything is triggered from your host shell. The runner container is ephemeral — spawned per flow run, exits when the flow completes. Only `prefect-server` and `postgres` run continuously.
+Everything is triggered from your host shell. Shortcuts for every row live in [`justfile`](justfile) — `just` lists them, e.g. `just run` / `just dev` / `just year=2025 run`. The runner container is ephemeral — spawned per flow run, exits when the flow completes. Only `prefect-server` and `postgres` run continuously.
 
 | Need | Command | Where it runs |
 |---|---|---|
